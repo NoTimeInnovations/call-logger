@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose draws the UI; this base theme only controls the window / status bar.
+         Parented on a platform theme so no extra XML theme library is needed. -->
+    <style name="Theme.CallLogger" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#2563EB</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

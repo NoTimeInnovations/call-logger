@@ -1,0 +1,22 @@
+# Gradle / Android build output
+.gradle/
+build/
+app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Local SDK path (provided by CI / Android Studio, never commit)
+local.properties
+
+# IDE
+*.iml
+.idea/
+
+# OS
+.DS_Store
+
+# Keystores / secrets
+*.jks
+*.keystore
+!debug.keystore
