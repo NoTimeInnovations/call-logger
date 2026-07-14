@@ -6,7 +6,7 @@
  * idempotent (wa_sends dedupe_key) so retries never double-message.
  */
 import { hasura } from './hasura';
-import { getWhatsAppCreds, sendTemplate, WhatsAppEnv, WaCreds } from './whatsapp';
+import { getWhatsAppCreds, isOptedOut, sendTemplate, WhatsAppEnv, WaCreds } from './whatsapp';
 
 export type SchedulerEnv = WhatsAppEnv;
 
@@ -144,6 +144,12 @@ async function sendToTarget(
   if (!sendId) {
     // Already handled in a prior tick; reflect that on the target if still pending.
     await setTarget(env, t.id, 'sent', null, null);
+    return;
+  }
+
+  if (await isOptedOut(env, t.to_e164)) {
+    await updateWaSend(env, sendId, 'failed', null, 'opted_out');
+    await setTarget(env, t.id, 'failed', null, 'opted_out');
     return;
   }
 

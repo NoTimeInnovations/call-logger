@@ -37,8 +37,9 @@ export interface Env {
   ADMIN_API_KEY?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string; // shared fallback number
   WHATSAPP_ACCESS_TOKEN?: string;
+  META_WEBHOOK_VERIFY_TOKEN?: string; // Meta webhook GET verification
+  META_APP_SECRET?: string; // Meta webhook HMAC signature
   // bindings
-  CALL_QUEUE: Queue<CallRecord>;
   INGEST_RATE_LIMITER: RateLimit;
   TOKENS: KVNamespace;
 }
@@ -72,7 +73,6 @@ interface CallRecord {
 
 const MAX_BODY_BYTES = 1_000_000; // 1 MB request cap
 const MAX_CALLS = 1000; // per request
-const QUEUE_CHUNK = 100; // Cloudflare Queues sendBatch limit
 const MAX_DURATION_SECONDS = 30 * 24 * 3600; // clamp absurd/hostile durations (bigint safety)
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -348,14 +348,29 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
   }
   if (records.length === 0) return json({ error: 'no valid calls' }, 400);
 
+  // Dedup within the request, then insert to Hasura inline (Free plan — no queue).
+  const seen = new Set<string>();
+  const deduped = records.filter((r) => {
+    const k = `${r.account_email} ${r.event_key}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
   try {
-    for (let i = 0; i < records.length; i += QUEUE_CHUNK) {
-      const chunk = records.slice(i, i + QUEUE_CHUNK);
-      await env.CALL_QUEUE.sendBatch(chunk.map((r) => ({ body: r })));
+    const inserted = await insertCalls(env, deduped);
+    // Trigger follow-up flows for newly-recorded inbound calls (best-effort).
+    if (inserted.length) {
+      try {
+        await startFlowRunsForCalls(env, inserted);
+      } catch (e) {
+        console.log(`flow start failed: ${(e as Error).message}`);
+      }
     }
-  } catch {
-    // Queue temporarily unavailable — tell the app to retry (nothing was dropped).
-    return json({ error: 'queue unavailable' }, 503);
+  } catch (e) {
+    // Storage temporarily unavailable — tell the app to retry (idempotent, nothing lost).
+    console.log(`ingest insert failed: ${(e as Error).message}`);
+    return json({ error: 'store unavailable' }, 503);
   }
 
   return json({ accepted: records.length }, 202);
@@ -378,37 +393,6 @@ async function insertCalls(env: Env, objects: CallRecord[]): Promise<NewCall[]> 
   return data.insert_call_logs.returning;
 }
 
-/** Consumer: coalesce a batch (dedup within batch) and write once. Retry whole batch on failure. */
-async function handleQueue(batch: MessageBatch<CallRecord>, env: Env): Promise<void> {
-  const seen = new Set<string>();
-  const objects: CallRecord[] = [];
-  for (const m of batch.messages) {
-    const r = m.body;
-    if (!r || !r.account_email || !r.event_key) continue;
-    const k = `${r.account_email} ${r.event_key}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    objects.push(r);
-  }
-
-  try {
-    const inserted = objects.length ? await insertCalls(env, objects) : [];
-    // Trigger follow-up flows for newly-recorded inbound calls. Best-effort: a failure
-    // here must not force a batch retry (which would re-insert -> dedupe -> empty).
-    if (inserted.length) {
-      try {
-        await startFlowRunsForCalls(env, inserted);
-      } catch (e) {
-        console.log(`flow start failed: ${(e as Error).message}`);
-      }
-    }
-    batch.ackAll();
-  } catch (e) {
-    // No PII/secrets in logs — only the reason + count.
-    console.log(`consumer insert failed (${objects.length} rows): ${(e as Error).message}`);
-    batch.retryAll({ delaySeconds: 15 });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Flow builder + scheduler APIs (consumed by the app and the superadmin panel)
@@ -704,6 +688,101 @@ async function handleAdminScheduleTargets(request: Request, env: Env, url: URL):
   return json({ items: data.scheduled_message_targets });
 }
 
+// ---------------------------------------------------------------------------
+// Meta WhatsApp inbound webhook: records replies (for flow conditions) + opt-outs.
+// ---------------------------------------------------------------------------
+
+function handleWebhookVerify(_request: Request, env: Env, url: URL): Response {
+  const mode = url.searchParams.get('hub.mode');
+  const token = url.searchParams.get('hub.verify_token');
+  const challenge = url.searchParams.get('hub.challenge');
+  if (mode === 'subscribe' && token && env.META_WEBHOOK_VERIFY_TOKEN && token === env.META_WEBHOOK_VERIFY_TOKEN) {
+    return new Response(challenge ?? '', { status: 200, headers: { 'content-type': 'text/plain' } });
+  }
+  return new Response('forbidden', { status: 403 });
+}
+
+async function verifyMetaSignature(secret: string, raw: string, header: string | null): Promise<boolean> {
+  if (!header || !header.startsWith('sha256=')) return false;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw));
+  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return timingSafeEqual(`sha256=${hex}`, header);
+}
+
+async function handleWebhookEvent(request: Request, env: Env): Promise<Response> {
+  const raw = await request.text();
+  if (env.META_APP_SECRET) {
+    const ok = await verifyMetaSignature(env.META_APP_SECRET, raw, request.headers.get('x-hub-signature-256'));
+    if (!ok) return json({ error: 'bad signature' }, 401);
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return json({ ok: true }); // ack malformed so Meta doesn't retry-storm
+  }
+  try {
+    await processInbound(env, payload);
+  } catch (e) {
+    console.log(`webhook: ${(e as Error).message}`);
+  }
+  return json({ ok: true }); // always 200
+}
+
+async function processInbound(env: Env, payload: unknown): Promise<void> {
+  const p = payload as { entry?: Array<{ changes?: Array<{ value?: Record<string, unknown> }> }> };
+  const replies: Array<Record<string, unknown>> = [];
+  const optouts: Array<Record<string, unknown>> = [];
+
+  for (const entry of p.entry ?? []) {
+    for (const ch of entry.changes ?? []) {
+      const val = (ch.value ?? {}) as {
+        metadata?: { phone_number_id?: string };
+        messages?: Array<{ from?: string; id?: string; type?: string; text?: { body?: string }; button?: { text?: string } }>;
+      };
+      const pnid = val.metadata?.phone_number_id ?? null;
+      for (const m of val.messages ?? []) {
+        if (!m.from) continue;
+        const from = '+' + String(m.from).replace(/[^0-9]/g, '');
+        const bodyText = m.text?.body ?? m.button?.text ?? null;
+        replies.push({
+          phone_number_id: pnid,
+          from_e164: from,
+          wa_message_id: m.id ?? null,
+          text_body: bodyText ? String(bodyText).slice(0, 1000) : null,
+        });
+        if (bodyText && /^\s*(stop|unsubscribe|stop all)\s*$/i.test(String(bodyText))) {
+          optouts.push({ phone_e164: from, source: 'stop_reply' });
+        }
+      }
+    }
+  }
+
+  if (replies.length) {
+    await hasura(
+      env,
+      `mutation R($o: [wa_replies_insert_input!]!) { insert_wa_replies(objects: $o) { affected_rows } }`,
+      { o: replies }
+    );
+  }
+  if (optouts.length) {
+    await hasura(
+      env,
+      `mutation O($o: [cl_optout_insert_input!]!) {
+        insert_cl_optout(objects: $o, on_conflict: { constraint: cl_optout_pkey, update_columns: [] }) { affected_rows }
+      }`,
+      { o: optouts }
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -713,6 +792,10 @@ export default {
     if (method === 'GET' && p === '/health') return json({ ok: true });
     if (method === 'POST' && p === '/register') return handleRegister(request, env);
     if (method === 'POST' && p === '/ingest') return handleIngest(request, env);
+
+    // Meta WhatsApp inbound webhook
+    if (method === 'GET' && p === '/webhooks/whatsapp') return handleWebhookVerify(request, env, url);
+    if (method === 'POST' && p === '/webhooks/whatsapp') return handleWebhookEvent(request, env);
 
     // Partner (per-device token) — flow builder + scheduler
     if (p === '/flow' && method === 'GET') return handleGetFlow(request, env);
@@ -728,10 +811,6 @@ export default {
     if (p === '/admin/schedule/targets' && method === 'GET') return handleAdminScheduleTargets(request, env, url);
 
     return json({ error: 'not found' }, 404);
-  },
-
-  async queue(batch: MessageBatch<CallRecord>, env: Env): Promise<void> {
-    return handleQueue(batch, env);
   },
 
   /** Cron (every minute): advance due flow steps and dispatch due scheduled messages. */
@@ -752,4 +831,4 @@ export default {
       })()
     );
   },
-} satisfies ExportedHandler<Env, CallRecord>;
+} satisfies ExportedHandler<Env>;

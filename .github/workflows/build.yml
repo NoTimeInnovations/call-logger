@@ -30,6 +30,9 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build debug APK
+        env:
+          INGEST_BASE_URL: ${{ secrets.INGEST_BASE_URL }}
+          INGEST_APP_KEY: ${{ secrets.INGEST_APP_KEY }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK artifact

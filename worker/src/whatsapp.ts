@@ -140,3 +140,13 @@ export async function sendTemplate(
   }
   return body.messages?.[0]?.id ?? '';
 }
+
+/** True if the number is on the global opt-out list (STOP reply). */
+export async function isOptedOut(env: WhatsAppEnv, e164: string): Promise<boolean> {
+  const d = await hasura<{ cl_optout_by_pk: { phone_e164: string } | null }>(
+    env,
+    `query O($p: String!) { cl_optout_by_pk(phone_e164: $p) { phone_e164 } }`,
+    { p: e164 }
+  );
+  return !!d.cl_optout_by_pk;
+}

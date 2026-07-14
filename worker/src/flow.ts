@@ -9,7 +9,7 @@
  * in wa_sends) so a crash/retry never double-messages a caller.
  */
 import { hasura } from './hasura';
-import { getWhatsAppCreds, sendTemplate, WhatsAppEnv } from './whatsapp';
+import { getWhatsAppCreds, isOptedOut, sendTemplate, WhatsAppEnv } from './whatsapp';
 
 export type FlowEnv = WhatsAppEnv;
 
@@ -36,6 +36,7 @@ interface RunRow {
   contact_name: string | null;
   graph: Graph;
   cursor_node_id: string;
+  created_at: string;
 }
 
 /** A call row that just landed (from the queue consumer). */
@@ -168,7 +169,7 @@ async function claimRun(
         where: { id: { _eq: $id }, status: { _eq: "active" },
                  _or: [{ lease_until: { _is_null: true } }, { lease_until: { _lt: $now } }] }
         _set: { lease_until: $lease, claimed_at: $now }
-      ) { returning { id partner_id account_email contact_e164 contact_name graph cursor_node_id } }
+      ) { returning { id partner_id account_email contact_e164 contact_name graph cursor_node_id created_at } }
     }`,
     { id, now: nowIso, lease: leaseIso }
   );
@@ -193,8 +194,10 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
       const dueAt = new Date(Date.now() + seconds * 1000).toISOString();
       return scheduleNext(env, run.id, next, dueAt);
     } else if (node.type === 'condition') {
-      const branch = evaluateCondition(node) ? 'true' : 'false';
-      cursor = nextNodeId(g, node.id, branch);
+      const check = String(node.data?.check ?? 'not_replied');
+      const replied = await hasReplied(env, run.contact_e164, run.created_at);
+      const satisfied = check === 'replied' ? replied : !replied;
+      cursor = nextNodeId(g, node.id, satisfied ? 'true' : 'false');
     } else {
       // trigger / unknown -> pass through
       cursor = nextNodeId(g, node.id);
@@ -205,11 +208,16 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
   return finishRun(env, run.id, 'done');
 }
 
-/** Phase-1 condition eval. Real inbound-reply detection needs the Meta inbound webhook. */
-function evaluateCondition(node: FlowNode): boolean {
-  const check = String(node.data?.check ?? 'not_replied');
-  // Without inbound tracking yet, treat "not_replied" as true and "replied" as false.
-  return check !== 'replied';
+/** Whether the contact has replied on WhatsApp since the run started (inbound webhook). */
+async function hasReplied(env: FlowEnv, e164: string, sinceIso: string): Promise<boolean> {
+  const d = await hasura<{ wa_replies: Array<{ id: string }> }>(
+    env,
+    `query R($p: String!, $s: timestamptz!) {
+      wa_replies(where: { from_e164: { _eq: $p }, received_at: { _gte: $s } }, limit: 1) { id }
+    }`,
+    { p: e164, s: sinceIso }
+  );
+  return d.wa_replies.length > 0;
 }
 
 async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<void> {
@@ -241,6 +249,11 @@ async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<v
   );
   const sendId = claim.insert_wa_sends_one?.id;
   if (!sendId) return; // already sent/attempted by a prior run of this step
+
+  if (await isOptedOut(env, run.contact_e164)) {
+    await updateSend(env, sendId, 'failed', null, 'opted_out');
+    return;
+  }
 
   try {
     const creds = await getWhatsAppCreds(env, run.partner_id);
