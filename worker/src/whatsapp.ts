@@ -36,13 +36,36 @@ interface PartnerRow {
 
 /** Pull the best (primary) connected number's credentials for a partner. */
 export async function getWhatsAppCreds(env: WhatsAppEnv, partnerId: string): Promise<WaCreds | null> {
-  const data = await hasura<{ partners_by_pk: PartnerRow | null }>(
+  const data = await hasura<{
+    partners_by_pk: PartnerRow | null;
+    whatsapp_business_integrations: Array<{ phone_number_id: string | null; access_token: string | null }>;
+  }>(
     env,
-    `query P($id: uuid!) { partners_by_pk(id: $id) { id store_name whatsapp_numbers } }`,
+    `query P($id: uuid!) {
+      partners_by_pk(id: $id) { id store_name whatsapp_numbers }
+      whatsapp_business_integrations(where: { partner_id: { _eq: $id } }, order_by: { is_primary: desc }, limit: 1) {
+        phone_number_id
+        access_token
+      }
+    }`,
     { id: partnerId }
   );
   const p = data.partners_by_pk;
   const businessName = p?.store_name?.trim() || 'us';
+
+  // Primary source of truth: the partner's connected number (matches cravings-v2's send path).
+  // The stored integration token is a Coexistence token for that partner's WABA; fall back to
+  // the shared system token only if the integration has none.
+  const integ = data.whatsapp_business_integrations[0];
+  if (integ?.phone_number_id) {
+    return {
+      phoneNumberId: integ.phone_number_id,
+      accessToken: integ.access_token || env.WHATSAPP_ACCESS_TOKEN || '',
+      businessName,
+    };
+  }
+
+  // Secondary: creds embedded in partners.whatsapp_numbers (legacy shape).
   const extracted = extractCreds(p?.whatsapp_numbers, null);
   if (extracted) return { ...extracted, businessName };
 
