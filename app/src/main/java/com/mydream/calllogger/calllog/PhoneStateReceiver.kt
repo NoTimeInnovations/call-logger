@@ -6,6 +6,7 @@ import android.content.Intent
 import android.telephony.TelephonyManager
 import com.mydream.calllogger.data.AppDatabase
 import com.mydream.calllogger.data.CallRepository
+import com.mydream.calllogger.net.CallUploader
 import com.mydream.calllogger.work.CallSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 delay(2500)
                 val db = AppDatabase.getInstance(appContext)
                 CallRepository(appContext, db.callDao()).syncFromDeviceCallLog()
-                // Hand the newly-captured call(s) to the reliable upload worker.
+                // Upload right now for low latency (no WorkManager scheduling delay)…
+                CallUploader.uploadPending(appContext)
+                // …and enqueue the worker as a retrying backup if that attempt failed/timed out.
                 CallSync.enqueueNow(appContext)
             } catch (_: Exception) {
                 // READ_CALL_LOG may be missing; nothing else to do.

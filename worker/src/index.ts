@@ -305,8 +305,8 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   return json({ token, partnerId }, 201);
 }
 
-/** Producer: authenticate (per-device token), validate, enqueue. DB write is in the consumer. */
-async function handleIngest(request: Request, env: Env): Promise<Response> {
+/** Authenticate (per-device token), validate, insert, and kick off follow-up flows. */
+async function handleIngest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // Per-device token -> { email, partnerId }, minted by /register. The app never sends
   // account_email; it is derived server-side, so a device can only write to its own
   // partner account (no cross-tenant spoofing).
@@ -363,6 +363,11 @@ async function handleIngest(request: Request, env: Env): Promise<Response> {
     if (inserted.length) {
       try {
         await startFlowRunsForCalls(env, inserted);
+        // Send the immediate step now (after responding) instead of waiting for the
+        // every-minute cron — the cron remains the safety net for waits/retries.
+        ctx.waitUntil(
+          advanceDueRuns(env, new Date()).catch((e) => console.log(`inline advance: ${(e as Error).message}`))
+        );
       } catch (e) {
         console.log(`flow start failed: ${(e as Error).message}`);
       }
@@ -830,14 +835,14 @@ async function processInbound(env: Env, payload: unknown): Promise<void> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const p = url.pathname;
     const method = request.method;
 
     if (method === 'GET' && p === '/health') return json({ ok: true });
     if (method === 'POST' && p === '/register') return handleRegister(request, env);
-    if (method === 'POST' && p === '/ingest') return handleIngest(request, env);
+    if (method === 'POST' && p === '/ingest') return handleIngest(request, env, ctx);
 
     // Meta WhatsApp inbound webhook
     if (method === 'GET' && p === '/webhooks/whatsapp') return handleWebhookVerify(request, env, url);
