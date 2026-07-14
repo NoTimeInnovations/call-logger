@@ -621,25 +621,35 @@ async function handleAdminPartnerConfig(request: Request, env: Env, url: URL): P
   const partnerId = url.searchParams.get('partner');
   if (!partnerId) return json({ error: 'partner required' }, 400);
 
-  const flow = await getFlowFor(env, partnerId);
-  const agg = await hasura<{
-    call_logs_aggregate: { aggregate: { count: number } };
-    partners_by_pk: { store_name: string | null } | null;
-  }>(
-    env,
-    `query A($p: uuid!) {
-      call_logs_aggregate(where: { partner_id: { _eq: $p } }) { aggregate { count } }
-      partners_by_pk(id: $p) { store_name }
-    }`,
-    { p: partnerId }
-  );
-  const canSend = !!(await getWhatsAppCreds(env, partnerId));
-  return json({
-    flow,
-    storeName: agg.partners_by_pk?.store_name ?? null,
-    totalCalls: agg.call_logs_aggregate.aggregate.count,
-    whatsappReady: canSend,
-  });
+  try {
+    const flow = await getFlowFor(env, partnerId);
+    const agg = await hasura<{
+      call_logs_aggregate: { aggregate: { count: number } };
+      partners_by_pk: { store_name: string | null } | null;
+    }>(
+      env,
+      `query A($p: uuid!) {
+        call_logs_aggregate(where: { partner_id: { _eq: $p } }) { aggregate { count } }
+        partners_by_pk(id: $p) { store_name }
+      }`,
+      { p: partnerId }
+    );
+    let canSend = false;
+    try {
+      canSend = !!(await getWhatsAppCreds(env, partnerId));
+    } catch {
+      canSend = false; // never let a WhatsApp-creds read 500 the config view
+    }
+    return json({
+      flow,
+      storeName: agg.partners_by_pk?.store_name ?? null,
+      totalCalls: agg.call_logs_aggregate.aggregate.count,
+      whatsappReady: canSend,
+    });
+  } catch (e) {
+    console.log(`admin/partner failed: ${(e as Error).message}`);
+    return json({ error: 'config_failed', detail: (e as Error).message }, 500);
+  }
 }
 
 /** GET /admin/calls?partner=<id>&from=<iso>&to=<iso>&limit= — a partner's call logs in a range. */

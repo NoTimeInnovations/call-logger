@@ -38,12 +38,12 @@ interface PartnerRow {
 export async function getWhatsAppCreds(env: WhatsAppEnv, partnerId: string): Promise<WaCreds | null> {
   const data = await hasura<{ partners_by_pk: PartnerRow | null }>(
     env,
-    `query P($id: uuid!) { partners_by_pk(id: $id) { id store_name whatsapp_numbers primary_whatsapp_number } }`,
+    `query P($id: uuid!) { partners_by_pk(id: $id) { id store_name whatsapp_numbers } }`,
     { id: partnerId }
   );
   const p = data.partners_by_pk;
   const businessName = p?.store_name?.trim() || 'us';
-  const extracted = extractCreds(p?.whatsapp_numbers, p?.primary_whatsapp_number ?? null);
+  const extracted = extractCreds(p?.whatsapp_numbers, null);
   if (extracted) return { ...extracted, businessName };
 
   // Fallback: shared Menuthere number.
