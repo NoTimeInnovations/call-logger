@@ -425,13 +425,17 @@ function validateGraph(
   if (g.nodes.length > 100 || g.edges.length > 200) return { ok: false, error: 'graph too large' };
   const ids = new Set<string>();
   let triggers = 0;
+  let triggerId = '';
   for (const n of g.nodes as Array<Record<string, unknown>>) {
     if (!n || typeof n.id !== 'string' || typeof n.type !== 'string') {
       return { ok: false, error: 'invalid node' };
     }
     if (ids.has(n.id)) return { ok: false, error: `duplicate node id ${n.id}` };
     ids.add(n.id);
-    if (n.type === 'trigger') triggers++;
+    if (n.type === 'trigger') {
+      triggers++;
+      triggerId = n.id;
+    }
   }
   if (triggers !== 1) return { ok: false, error: 'exactly one trigger node required' };
   for (const e of g.edges as Array<Record<string, unknown>>) {
@@ -442,7 +446,12 @@ function validateGraph(
       return { ok: false, error: 'invalid edge target' };
     }
   }
-  return { ok: true, graph: { nodes: g.nodes as FlowGraph['nodes'], edges: g.edges as FlowGraph['edges'] } };
+  // Normalize: the trigger must only ever be a source. Flip any edge pointing TO it
+  // (guards against a builder connecting steps in reverse order).
+  const normEdges = (g.edges as FlowGraph['edges']).map((e) =>
+    e.to === triggerId ? { ...e, from: triggerId, to: e.from } : e
+  );
+  return { ok: true, graph: { nodes: g.nodes as FlowGraph['nodes'], edges: normEdges } };
 }
 
 async function getFlowFor(env: Env, partnerId: string): Promise<unknown> {

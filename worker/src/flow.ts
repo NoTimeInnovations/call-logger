@@ -120,7 +120,12 @@ async function loadEnabledFlow(
   if (!f || !f.graph) return null;
   const trg = triggerNode(f.graph);
   if (!trg) return null;
-  const start = nextNodeId(f.graph, trg.id);
+  let start = nextNodeId(f.graph, trg.id);
+  if (!start) {
+    // Tolerate a reversed edge (something -> trigger): the other end is the first step.
+    const rev = f.graph.edges.find((e) => e.to === trg.id && e.from && e.from !== trg.id);
+    start = rev ? rev.from : null;
+  }
   if (!start) return null; // trigger with no action
   return { flow_id: f.id, graph: f.graph, start };
 }
