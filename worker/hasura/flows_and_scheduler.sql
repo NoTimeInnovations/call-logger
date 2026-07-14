@@ -59,9 +59,10 @@ CREATE TABLE IF NOT EXISTS public.flow_runs (
 -- Hot due-scan for the dispatch cron.
 CREATE INDEX IF NOT EXISTS flow_runs_due_idx
   ON public.flow_runs (next_due_at) WHERE status = 'active';
--- One live run per call (idempotent trigger).
-CREATE UNIQUE INDEX IF NOT EXISTS flow_runs_call_idx
-  ON public.flow_runs (call_log_id) WHERE call_log_id IS NOT NULL;
+-- One live run per call (idempotent trigger). A full UNIQUE CONSTRAINT (not a
+-- partial index) — Postgres allows multiple NULL call_log_id, and Hasura's
+-- on_conflict requires a real constraint (partial indexes are rejected).
+ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_call_log_id_key UNIQUE (call_log_id);
 
 -- Every WhatsApp send attempt (from a flow or a scheduled message). Source of truth
 -- for "sent or not" + cross-run dedupe.

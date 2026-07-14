@@ -86,7 +86,7 @@ export async function startFlowRunsForCalls(env: FlowEnv, calls: NewCall[]): Pro
     await hasura(
       env,
       `mutation Start($o: flow_runs_insert_input!) {
-        insert_flow_runs_one(object: $o, on_conflict: { constraint: flow_runs_call_idx, update_columns: [] }) { id }
+        insert_flow_runs_one(object: $o, on_conflict: { constraint: flow_runs_call_log_id_key, update_columns: [] }) { id }
       }`,
       {
         o: {
