@@ -698,6 +698,33 @@ async function handleAdminScheduleTargets(request: Request, env: Env, url: URL):
   return json({ items: data.scheduled_message_targets });
 }
 
+/** GET /admin/messages?partner=<id>&status=&source=&limit= — WhatsApp send log (wa_sends). */
+async function handleAdminMessages(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!isAdmin(request, env)) return json({ error: 'unauthorized' }, 401);
+  const partnerId = url.searchParams.get('partner');
+  if (!partnerId) return json({ error: 'partner required' }, 400);
+  const status = url.searchParams.get('status'); // pending|sent|failed
+  const source = url.searchParams.get('source'); // flow|schedule
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 200, 1000);
+
+  const conds = ['partner_id: { _eq: $p }'];
+  const varDefs = ['$p: uuid!', '$limit: Int!'];
+  const vars: Record<string, unknown> = { p: partnerId, limit };
+  if (status) { conds.push('status: { _eq: $status }'); varDefs.push('$status: String!'); vars.status = status; }
+  if (source) { conds.push('source: { _eq: $source }'); varDefs.push('$source: String!'); vars.source = source; }
+
+  const data = await hasura<{ wa_sends: unknown[] }>(
+    env,
+    `query M(${varDefs.join(', ')}) {
+      wa_sends(where: { ${conds.join(', ')} }, order_by: { created_at: desc }, limit: $limit) {
+        to_e164 template_name language source status wa_message_id error created_at
+      }
+    }`,
+    vars
+  );
+  return json({ items: data.wa_sends });
+}
+
 // ---------------------------------------------------------------------------
 // Meta WhatsApp inbound webhook: records replies (for flow conditions) + opt-outs.
 // ---------------------------------------------------------------------------
@@ -819,6 +846,7 @@ export default {
     if (p === '/admin/flow' && (method === 'GET' || method === 'PUT')) return handleAdminFlow(request, env, url);
     if (p === '/admin/schedule' && (method === 'GET' || method === 'POST')) return handleAdminSchedule(request, env, url);
     if (p === '/admin/schedule/targets' && method === 'GET') return handleAdminScheduleTargets(request, env, url);
+    if (p === '/admin/messages' && method === 'GET') return handleAdminMessages(request, env, url);
 
     return json({ error: 'not found' }, 404);
   },
