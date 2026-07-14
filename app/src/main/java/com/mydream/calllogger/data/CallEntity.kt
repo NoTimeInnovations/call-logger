@@ -14,7 +14,10 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "calls",
-    indices = [Index(value = ["number", "date", "type"], unique = true)]
+    indices = [
+        Index(value = ["number", "date", "type"], unique = true),
+        Index(value = ["synced"])
+    ]
 )
 data class CallEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -22,5 +25,10 @@ data class CallEntity(
     val name: String?,
     val type: Int,
     val date: Long,      // epoch millis when the call happened
-    val duration: Long   // call length in seconds
+    val duration: Long,  // call length in seconds
+    // --- upload metadata (added in schema v2) ---
+    val eventKey: String = "",   // stable idempotency key = sha256(digits(number)|date|type)
+    val e164: String? = null,    // normalized number, when parseable
+    val tzIana: String = "",     // device IANA timezone at capture (e.g. Asia/Kolkata)
+    val synced: Boolean = false  // true once accepted (2xx) by the ingestion backend
 )

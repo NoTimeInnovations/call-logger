@@ -1,0 +1,53 @@
+name = "call-logger-ingest"
+main = "src/index.ts"
+compatibility_date = "2024-11-06"
+
+# --- Non-secret configuration -------------------------------------------------
+# The GraphQL endpoint of the cravingsv2 Hasura instance.
+[vars]
+HASURA_GRAPHQL_URL = "https://YOUR-HASURA-HOST/v1/graphql"
+# Optional: run the insert under a least-privilege Hasura role instead of full admin
+# (see hasura/call_logs.sql). Leave unset to use the admin role.
+HASURA_ROLE = "call_ingest"
+# Meta Graph API version used for WhatsApp sends.
+GRAPH_API_VERSION = "v20.0"
+
+# Cron: advance flow steps + dispatch scheduled messages every minute.
+[triggers]
+crons = ["* * * * *"]
+
+# --- KV: per-device token store (minted by /register) -------------------------
+# Create with:  npx wrangler kv namespace create TOKENS
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# --- Rate limiting: per-account throttle on /ingest ---------------------------
+# 300 requests / 60s keyed by account email. Bounds abuse/amplification even
+# when a valid app key is presented. namespace_id is any unique integer string.
+[[unsafe.bindings]]
+name = "INGEST_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 300, period = 60 }
+
+# --- Queue: producer (this Worker enqueues) -----------------------------------
+[[queues.producers]]
+binding = "CALL_QUEUE"
+queue = "call-ingest"
+
+# --- Queue: consumer (this Worker drains + writes to Hasura) -------------------
+[[queues.consumers]]
+queue = "call-ingest"
+max_batch_size = 100        # up to 100 calls collapsed into one Hasura insert
+max_batch_timeout = 5       # ...or flush after 5s, whichever comes first
+max_retries = 5             # transient Hasura failures are retried
+dead_letter_queue = "call-ingest-dlq"   # give-ups land here for inspection
+
+# --- SECRETS (do NOT put these here; set them out-of-band) ---------------------
+#   npx wrangler secret put HASURA_ADMIN_SECRET
+#   npx wrangler secret put INGEST_APP_KEY
+# Create the queues once before first deploy:
+#   npx wrangler queues create call-ingest
+#   npx wrangler queues create call-ingest-dlq

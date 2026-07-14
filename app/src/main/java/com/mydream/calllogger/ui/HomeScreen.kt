@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
@@ -63,7 +64,7 @@ import com.mydream.calllogger.export.Exporter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: AppViewModel) {
+fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -143,6 +144,9 @@ fun HomeScreen(vm: AppViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenFlowBuilder) {
+                        Icon(Icons.Filled.AccountTree, contentDescription = "Call flow")
+                    }
                     IconButton(onClick = { vm.sync() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Sync now")
                     }

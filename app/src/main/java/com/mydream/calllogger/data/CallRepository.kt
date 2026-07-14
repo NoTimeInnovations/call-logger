@@ -2,6 +2,9 @@ package com.mydream.calllogger.data
 
 import android.content.Context
 import android.provider.CallLog
+import android.telephony.PhoneNumberUtils
+import android.telephony.TelephonyManager
+import java.util.TimeZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -21,6 +24,22 @@ class CallRepository(
 
     suspend fun count(): Int = dao.count()
 
+    /** Calls not yet accepted by the backend, oldest first. */
+    suspend fun unsynced(limit: Int): List<CallEntity> = dao.unsynced(limit)
+
+    /** Marks the given calls as uploaded. */
+    suspend fun markSynced(ids: List<Long>) = dao.markSynced(ids)
+
+    fun observePendingCount(): Flow<Int> = dao.observePendingCount()
+
+    /** ISO-3166 region for E.164 normalization; SIM/network country, defaulting to India. */
+    private fun region(): String {
+        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        val iso = tm?.simCountryIso?.takeIf { it.isNotBlank() }
+            ?: tm?.networkCountryIso?.takeIf { it.isNotBlank() }
+        return (iso ?: "IN").uppercase()
+    }
+
     /**
      * Reads the device call log and stores any new entries locally.
      * Requires the READ_CALL_LOG permission. Returns the number of newly
@@ -35,6 +54,8 @@ class CallRepository(
             CallLog.Calls.DURATION
         )
         val entities = ArrayList<CallEntity>()
+        val region = region()
+        val tz = TimeZone.getDefault().id
         context.contentResolver.query(
             CallLog.Calls.CONTENT_URI,
             projection,
@@ -59,7 +80,11 @@ class CallRepository(
                         name = name,
                         type = type,
                         date = date,
-                        duration = duration
+                        duration = duration,
+                        eventKey = IdempotencyKey.of(number, date, type),
+                        e164 = runCatching { PhoneNumberUtils.formatNumberToE164(number, region) }
+                            .getOrNull(),
+                        tzIana = tz
                     )
                 )
             }

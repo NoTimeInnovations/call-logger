@@ -1,8 +1,22 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
 }
+
+/**
+ * Backend config (Worker URL + app key) is read from local.properties or the
+ * environment and baked into BuildConfig. local.properties is gitignored, so no
+ * endpoint/key is ever committed — and this is the app KEY, never a Hasura credential.
+ */
+val ingestProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun ingestProp(key: String, default: String): String =
+    ingestProps.getProperty(key) ?: System.getenv(key) ?: default
 
 android {
     namespace = "com.mydream.calllogger"
@@ -15,6 +29,10 @@ android {
         versionCode = 1
         versionName = "1.0"
         vectorDrawables { useSupportLibrary = true }
+
+        // Cloudflare Worker ingest endpoint + shared app key (from local.properties / env).
+        buildConfigField("String", "INGEST_BASE_URL", "\"${ingestProp("INGEST_BASE_URL", "")}\"")
+        buildConfigField("String", "INGEST_APP_KEY", "\"${ingestProp("INGEST_APP_KEY", "")}\"")
     }
 
     buildTypes {
@@ -37,6 +55,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
@@ -66,6 +85,11 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    // Reliable, constraint-aware background upload of captured calls to the Worker.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Keystore-backed storage for the per-device ingest token.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

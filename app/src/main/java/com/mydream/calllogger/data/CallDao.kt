@@ -33,4 +33,16 @@ interface CallDao {
 
     @Query("SELECT COUNT(*) FROM calls")
     suspend fun count(): Int
+
+    /** Oldest-first batch of calls not yet accepted by the backend. */
+    @Query("SELECT * FROM calls WHERE synced = 0 ORDER BY date ASC LIMIT :limit")
+    suspend fun unsynced(limit: Int): List<CallEntity>
+
+    /** Marks the given calls as uploaded, once the backend has returned 2xx. */
+    @Query("UPDATE calls SET synced = 1 WHERE id IN (:ids)")
+    suspend fun markSynced(ids: List<Long>)
+
+    /** Live count of calls still waiting to upload (for a future "N pending" UI). */
+    @Query("SELECT COUNT(*) FROM calls WHERE synced = 0")
+    fun observePendingCount(): Flow<Int>
 }

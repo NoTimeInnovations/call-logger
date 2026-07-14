@@ -1,0 +1,17 @@
+{
+  "name": "call-logger-ingest",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker that ingests call records via a queue and writes them to Hasura.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241106.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^3.90.0"
+  }
+}

@@ -10,6 +10,7 @@ import com.mydream.calllogger.data.CallRepository
 import com.mydream.calllogger.export.DateRange
 import com.mydream.calllogger.export.Exporter
 import com.mydream.calllogger.prefs.SettingsManager
+import com.mydream.calllogger.work.CallSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,6 +54,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val email = rawEmail.trim()
         settings.email = email
         _state.update { it.copy(onboardingComplete = true, email = email) }
+        // Upload any calls captured before onboarding, now that we have an account.
+        CallSync.enqueueNow(getApplication())
     }
 
     fun onPermissionsResult(callLogGranted: Boolean) {
@@ -91,6 +94,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(loading = true) }
             try {
                 repo.syncFromDeviceCallLog()
+                // Push freshly-synced calls to the backend.
+                CallSync.enqueueNow(getApplication())
             } catch (_: Exception) {
                 // The call-log permission may have been revoked; ignore and stop loading.
             } finally {
