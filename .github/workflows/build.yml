@@ -1,11 +1,16 @@
 name: Build APK
 
 # Builds an installable debug APK in the cloud on every push to main,
-# and on demand via the "Run workflow" button.
+# and on demand via the "Run workflow" button. Each build is published
+# as a GitHub Release with the APK attached for easy download.
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+# Required so the workflow can create releases and upload assets via GITHUB_TOKEN.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -35,9 +40,25 @@ jobs:
           INGEST_APP_KEY: ${{ secrets.INGEST_APP_KEY }}
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Stage APK with versioned name
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/call-logger-v1.0.${{ github.run_number }}.apk"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: call-logger-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: dist/call-logger-v1.0.${{ github.run_number }}.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: v1.0.${{ github.run_number }}
+          body: |
+            Automated debug build.
+            Commit: ${{ github.sha }}
+          files: dist/call-logger-v1.0.${{ github.run_number }}.apk
+          make_latest: true
