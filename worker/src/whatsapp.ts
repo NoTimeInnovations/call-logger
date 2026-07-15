@@ -122,6 +122,8 @@ export interface TemplateSend {
   template: string;
   language: string;
   bodyParams?: string[];
+  /** Link for a template whose HEADER is an IMAGE (required by Meta to send such templates). */
+  headerImage?: string;
 }
 
 /** Send one approved template message. Returns the Meta message id. Throws on failure. */
@@ -133,10 +135,23 @@ export async function sendTemplate(
 ): Promise<string> {
   const version = env.GRAPH_API_VERSION || 'v20.0';
   const url = `https://graph.facebook.com/${version}/${creds.phoneNumberId}/messages`;
-  const components =
-    msg.bodyParams && msg.bodyParams.length
-      ? [{ type: 'body', parameters: msg.bodyParams.map((t) => ({ type: 'text', text: t })) }]
-      : undefined;
+
+  // Meta requires the components in order (header before body). A media-header
+  // template MUST carry its header image at send time or Meta rejects it; a
+  // body with {{n}} vars needs exactly that many text params.
+  const components: Array<Record<string, unknown>> = [];
+  if (msg.headerImage && msg.headerImage.trim()) {
+    components.push({
+      type: 'header',
+      parameters: [{ type: 'image', image: { link: msg.headerImage.trim() } }],
+    });
+  }
+  if (msg.bodyParams && msg.bodyParams.length) {
+    components.push({
+      type: 'body',
+      parameters: msg.bodyParams.map((t) => ({ type: 'text', text: t })),
+    });
+  }
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -145,7 +160,7 @@ export async function sendTemplate(
     template: {
       name: msg.template,
       language: { code: msg.language || 'en' },
-      ...(components ? { components } : {}),
+      ...(components.length ? { components } : {}),
     },
   };
 

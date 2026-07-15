@@ -87,7 +87,7 @@ function toGraph(nodes: Node[], edges: Edge[]): FlowGraph {
       const kind = n.data.kind as Kind;
       const data: Record<string, unknown> = {};
       if (kind === 'trigger') data.event = 'call_received';
-      if (kind === 'send') { data.template = n.data.template ?? ''; data.language = n.data.language ?? 'en'; data.params = n.data.params ?? []; }
+      if (kind === 'send') { data.template = n.data.template ?? ''; data.language = n.data.language ?? 'en'; data.params = n.data.params ?? []; data.headerImage = n.data.headerImage ?? ''; }
       if (kind === 'wait') data.seconds = Number(n.data.seconds) || 0;
       if (kind === 'condition') data.check = n.data.check ?? 'not_replied';
       return { id: n.id, type: kind, position: n.position, data };
@@ -224,7 +224,9 @@ function Inspector({ node, patch, onDelete, partnerId }: { node: Node; patch: (d
               template={String(node.data.template ?? '')}
               language={String(node.data.language ?? 'en')}
               params={(node.data.params as string[]) ?? []}
+              headerImage={String(node.data.headerImage ?? '')}
               onChange={({ template, language }) => patch({ template, language })}
+              onHeaderImageChange={(url) => patch({ headerImage: url })}
             />
           </Field>
           <Field label="Body params (one per line)">

@@ -263,12 +263,25 @@ async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<v
   try {
     const creds = await getWhatsAppCreds(env, run.partner_id);
     if (!creds) throw new Error('no connected whatsapp number');
-    const params = resolveParams(node.data?.params, {
+    const ctx = {
       contact_name: run.contact_name || 'there',
       business_name: creds.businessName,
       number: run.contact_e164,
+    };
+    const params = resolveParams(node.data?.params, ctx);
+    // Header image for IMAGE-header templates (variables allowed, though it's
+    // usually a static banner URL).
+    const rawHeader = node.data?.headerImage;
+    const headerImage =
+      typeof rawHeader === 'string' && rawHeader.trim()
+        ? resolveParams([rawHeader], ctx)[0]
+        : undefined;
+    const mid = await sendTemplate(env, creds, run.contact_e164, {
+      template,
+      language,
+      bodyParams: params,
+      headerImage,
     });
-    const mid = await sendTemplate(env, creds, run.contact_e164, { template, language, bodyParams: params });
     await updateSend(env, sendId, 'sent', mid, null);
   } catch (e) {
     await updateSend(env, sendId, 'failed', null, (e as Error).message);
