@@ -53,3 +53,11 @@ export default function Page() { return <AndroidCallLoggerSection />; }
 | Load / save flow | `GET/PUT /admin/flow?partner=<id>` |
 | Scheduled messages | `GET/POST /admin/schedule?partner=<id>` |
 | Per-number delivery | `GET /admin/schedule/targets?id=<messageId>` |
+| Template picker + preview | `GET /admin/templates?partner=<id>` |
+
+The **template picker** (`components/callLogger/TemplatePicker.tsx`) replaces the
+free-text template-name inputs in the flow builder's *Send* node and the *New
+schedule* form with a dropdown of the partner's WhatsApp templates plus a live
+preview. Templates are read from the shared cravings-v2 Hasura mirror
+(`whatsapp_message_templates`), scoped to the partner's primary WABA (where sends
+go). If none are synced, it falls back to manual name entry.

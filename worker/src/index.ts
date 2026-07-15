@@ -739,6 +739,66 @@ async function handleAdminMessages(request: Request, env: Env, url: URL): Promis
   return json({ items: data.wa_sends });
 }
 
+/**
+ * GET /admin/templates?partner=<id> — the partner's WhatsApp message templates,
+ * read from the shared cravings-v2 Hasura mirror (`whatsapp_message_templates`).
+ *
+ * Templates live per-WABA. The Call Logger sends from the partner's PRIMARY
+ * connected number (see getWhatsAppCreds), so the list is scoped to that number's
+ * WABA — plus legacy rows with no waba_id — so the picker only offers templates
+ * that can actually be sent. If no primary WABA can be resolved, everything the
+ * partner has is returned. Any status is returned (with the status attached) so a
+ * stale-but-approved template is never hidden; the UI marks non-approved ones.
+ */
+async function handleAdminTemplates(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!isAdmin(request, env)) return json({ error: 'unauthorized' }, 401);
+  const partnerId = url.searchParams.get('partner');
+  if (!partnerId) return json({ error: 'partner required' }, 400);
+
+  try {
+    const data = await hasura<{
+      whatsapp_business_integrations: Array<{ waba_id: string | null }>;
+      whatsapp_message_templates: Array<{
+        name: string;
+        language: string;
+        category: string | null;
+        components: unknown;
+        status: string | null;
+        waba_id: string | null;
+      }>;
+    }>(
+      env,
+      `query T($p: uuid!) {
+        whatsapp_business_integrations(
+          where: { partner_id: { _eq: $p } }
+          order_by: { is_primary: desc }
+          limit: 1
+        ) { waba_id }
+        whatsapp_message_templates(
+          where: { partner_id: { _eq: $p } }
+          order_by: [{ name: asc }, { language: asc }]
+        ) { name language category components status waba_id }
+      }`,
+      { p: partnerId }
+    );
+
+    const primaryWaba = data.whatsapp_business_integrations[0]?.waba_id ?? null;
+    const items = data.whatsapp_message_templates
+      .filter((t) => !primaryWaba || !t.waba_id || t.waba_id === primaryWaba)
+      .map((t) => ({
+        name: t.name,
+        language: t.language,
+        category: t.category,
+        components: t.components,
+        status: t.status,
+      }));
+    return json({ items });
+  } catch (e) {
+    console.log(`admin/templates failed: ${(e as Error).message}`);
+    return json({ error: 'templates_failed', detail: (e as Error).message }, 500);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Meta WhatsApp inbound webhook: records replies (for flow conditions) + opt-outs.
 // ---------------------------------------------------------------------------
@@ -861,6 +921,7 @@ export default {
     if (p === '/admin/schedule' && (method === 'GET' || method === 'POST')) return handleAdminSchedule(request, env, url);
     if (p === '/admin/schedule/targets' && method === 'GET') return handleAdminScheduleTargets(request, env, url);
     if (p === '/admin/messages' && method === 'GET') return handleAdminMessages(request, env, url);
+    if (p === '/admin/templates' && method === 'GET') return handleAdminTemplates(request, env, url);
 
     return json({ error: 'not found' }, 404);
   },

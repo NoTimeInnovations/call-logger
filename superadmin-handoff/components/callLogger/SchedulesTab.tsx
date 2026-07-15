@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { CallLoggerApi, type ScheduleRow, type TargetRow } from '@/lib/callLogger';
+import TemplatePicker from './TemplatePicker';
 
 export default function SchedulesTab({ partnerId }: { partnerId: string }) {
   const [items, setItems] = useState<ScheduleRow[]>([]);
@@ -109,8 +110,13 @@ function NewSchedule({ partnerId, onCreated }: { partnerId: string; onCreated: (
 
   return (
     <div className="border rounded p-4 grid gap-3 max-w-lg">
-      <input value={template} onChange={(e) => setTemplate(e.target.value)} placeholder="Approved template name" className="border rounded px-3 py-2" />
-      <input value={language} onChange={(e) => setLanguage(e.target.value)} placeholder="Language (en)" className="border rounded px-3 py-2" />
+      <TemplatePicker
+        partnerId={partnerId}
+        template={template}
+        language={language}
+        params={params.split('\n').map((p) => p.trim()).filter(Boolean)}
+        onChange={({ template: t, language: l }) => { setTemplate(t); setLanguage(l); }}
+      />
       <div className="flex gap-2">
         {(['all_called', 'selected'] as const).map((m) => (
           <button key={m} onClick={() => setMode(m)} className={`px-3 py-1 rounded text-sm border ${mode === m ? 'bg-blue-600 text-white' : ''}`}>

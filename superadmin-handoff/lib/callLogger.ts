@@ -32,6 +32,22 @@ export interface FlowNode {
 export interface FlowEdge { from: string; to: string | null; branch?: string }
 export interface FlowGraph { nodes: FlowNode[]; edges: FlowEdge[] }
 
+/** One component of a WhatsApp message template (Meta's structure). */
+export interface TemplateComponent {
+  type: 'HEADER' | 'BODY' | 'FOOTER' | 'BUTTONS';
+  format?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'LOCATION';
+  text?: string;
+  buttons?: Array<{ type: string; text?: string; url?: string; phone_number?: string }>;
+}
+/** An approved (or pending) WhatsApp template the partner can send. */
+export interface TemplateRow {
+  name: string;
+  language: string;
+  category: string | null;
+  components: TemplateComponent[] | null;
+  status: string | null;
+}
+
 export const CallLoggerApi = {
   listPartners: () => req<{ items: PartnerRow[] }>(`/partners`),
   partnerConfig: (p: string) => req<PartnerConfig>(`/partner?partner=${encodeURIComponent(p)}`),
@@ -45,4 +61,5 @@ export const CallLoggerApi = {
   createSchedule: (p: string, body: unknown) =>
     req<{ id: string }>(`/schedule?partner=${encodeURIComponent(p)}`, { method: 'POST', body: JSON.stringify(body) }),
   targets: (id: string) => req<{ items: TargetRow[] }>(`/schedule/targets?id=${encodeURIComponent(id)}`),
+  templates: (p: string) => req<{ items: TemplateRow[] }>(`/templates?partner=${encodeURIComponent(p)}`),
 };

@@ -18,6 +18,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { CallLoggerApi, type FlowGraph } from '@/lib/callLogger';
+import TemplatePicker from './TemplatePicker';
 
 type Kind = 'trigger' | 'send' | 'wait' | 'condition';
 
@@ -197,14 +198,14 @@ export default function FlowBuilder({ partnerId, accountEmail }: { partnerId: st
 
         <div className="w-72 border rounded p-3">
           {!selected && <p className="text-sm text-gray-500">Select a node to edit it. Drag from a node's bottom dot to connect.</p>}
-          {selected && <Inspector node={selected} patch={patch} onDelete={deleteSelected} />}
+          {selected && <Inspector node={selected} patch={patch} onDelete={deleteSelected} partnerId={partnerId} />}
         </div>
       </div>
     </div>
   );
 }
 
-function Inspector({ node, patch, onDelete }: { node: Node; patch: (d: Record<string, unknown>) => void; onDelete: () => void }) {
+function Inspector({ node, patch, onDelete, partnerId }: { node: Node; patch: (d: Record<string, unknown>) => void; onDelete: () => void; partnerId: string }) {
   const kind = node.data.kind as Kind;
   return (
     <div className="space-y-3">
@@ -217,11 +218,14 @@ function Inspector({ node, patch, onDelete }: { node: Node; patch: (d: Record<st
 
       {kind === 'send' && (
         <>
-          <Field label="Template name">
-            <input className="border rounded px-2 py-1 w-full" value={String(node.data.template ?? '')} onChange={(e) => patch({ template: e.target.value })} />
-          </Field>
-          <Field label="Language">
-            <input className="border rounded px-2 py-1 w-full" value={String(node.data.language ?? 'en')} onChange={(e) => patch({ language: e.target.value })} />
+          <Field label="Template">
+            <TemplatePicker
+              partnerId={partnerId}
+              template={String(node.data.template ?? '')}
+              language={String(node.data.language ?? 'en')}
+              params={(node.data.params as string[]) ?? []}
+              onChange={({ template, language }) => patch({ template, language })}
+            />
           </Field>
           <Field label="Body params (one per line)">
             <textarea
