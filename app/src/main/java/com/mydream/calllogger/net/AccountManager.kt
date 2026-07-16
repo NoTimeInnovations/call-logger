@@ -36,6 +36,11 @@ class AccountManager(context: Context) {
         get() = prefs.getString(KEY_TOKEN, null)
         set(value) { prefs.edit().putString(KEY_TOKEN, value).apply() }
 
+    /** The partner this device is attached to — used to open the web flow editor. */
+    var partnerId: String?
+        get() = prefs.getString(KEY_PARTNER_ID, null)
+        set(value) { prefs.edit().putString(KEY_PARTNER_ID, value).apply() }
+
     val isRegistered: Boolean get() = !token.isNullOrBlank()
 
     /** Drops the token (e.g. after a 401) so the next sync re-registers. */
@@ -43,5 +48,6 @@ class AccountManager(context: Context) {
 
     private companion object {
         const val KEY_TOKEN = "ingest_token"
+        const val KEY_PARTNER_ID = "partner_id"
     }
 }

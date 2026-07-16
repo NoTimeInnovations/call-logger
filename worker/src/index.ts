@@ -925,7 +925,9 @@ async function getWaStatus(env: Env, partnerId: string): Promise<WaStatus> {
 async function handleWaStatus(request: Request, env: Env): Promise<Response> {
   const auth = await authDevice(request, env);
   if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
-  return json(await getWaStatus(env, auth.partnerId));
+  const status = await getWaStatus(env, auth.partnerId);
+  // partnerId lets the app open the web flow editor (menuthere.com/flow/<partnerId>).
+  return json({ ...status, partnerId: auth.partnerId });
 }
 
 // ---------------------------------------------------------------------------

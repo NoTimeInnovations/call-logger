@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import com.mydream.calllogger.FlowWebViewActivity
 import com.mydream.calllogger.net.WaStatus
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,7 +73,7 @@ import com.mydream.calllogger.util.BatteryOptimization
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
+fun HomeScreen(vm: AppViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -166,8 +167,11 @@ fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenFlowBuilder) {
-                        Icon(Icons.Filled.AccountTree, contentDescription = "Call flow")
+                    IconButton(onClick = {
+                        val url = vm.flowEditorUrl()
+                        if (url != null) FlowWebViewActivity.start(context, url) else vm.loadWaStatus()
+                    }) {
+                        Icon(Icons.Filled.AccountTree, contentDescription = "Edit call flow")
                     }
                     IconButton(onClick = { vm.sync() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Sync now")

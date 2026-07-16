@@ -36,7 +36,8 @@ data class UiState(
     val message: String? = null,
     val pendingShare: ShareInfo? = null,
     val waStatus: WaStatus? = null,
-    val runningFlow: Boolean = false
+    val runningFlow: Boolean = false,
+    val partnerId: String? = null
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -44,12 +45,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getInstance(app)
     private val repo = CallRepository(app, db.callDao())
     private val settings = SettingsManager(app)
+    private val account = AccountManager(app)
     private val exporter = Exporter(app)
 
     private val _state = MutableStateFlow(
         UiState(
             onboardingComplete = settings.isOnboardingComplete,
-            email = settings.email.orEmpty()
+            email = settings.email.orEmpty(),
+            partnerId = account.partnerId
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -137,7 +140,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Get the per-device token, registering one if needed (mirrors CallUploader). */
     private suspend fun ensureToken(): String? = withContext(Dispatchers.IO) {
-        val account = AccountManager(getApplication())
         var token = account.token
         if (token.isNullOrBlank()) {
             val email = settings.email
@@ -155,8 +157,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val token = ensureToken() ?: return@withContext null
                 WaStatus.parse(FlowApi.getWaStatus(token))
             }
-            if (status != null) _state.update { it.copy(waStatus = status) }
+            if (status != null) {
+                status.partnerId?.let { account.partnerId = it }
+                _state.update { it.copy(waStatus = status, partnerId = status.partnerId ?: it.partnerId) }
+            }
         }
+    }
+
+    /**
+     * URL of the web flow editor for this partner, with the device token in the
+     * fragment (never sent to the server). Null until we know the partner + token —
+     * callers should trigger [loadWaStatus] and retry.
+     */
+    fun flowEditorUrl(): String? {
+        val pid = _state.value.partnerId ?: account.partnerId ?: return null
+        val token = account.token ?: return null
+        return "https://menuthere.com/flow/$pid#$token"
     }
 
     /** Manually run the configured flow on a number (a synthetic call). */

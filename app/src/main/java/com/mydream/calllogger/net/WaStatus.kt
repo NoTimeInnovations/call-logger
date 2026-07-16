@@ -16,6 +16,7 @@ data class WaStatus(
     val businessVerificationStatus: String? = null,
     val paymentIssue: Boolean? = null,
     val canSend: String? = null,
+    val partnerId: String? = null,
     val error: String? = null,
 ) {
     companion object {
@@ -26,6 +27,7 @@ data class WaStatus(
                 WaStatus(
                     connected = o.optBoolean("connected", false),
                     number = o.stringOrNull("number"),
+                    partnerId = o.stringOrNull("partnerId"),
                     verified = if (o.has("verified") && !o.isNull("verified")) o.optBoolean("verified") else null,
                     businessVerificationStatus = o.stringOrNull("businessVerificationStatus"),
                     paymentIssue = if (o.has("paymentIssue") && !o.isNull("paymentIssue")) o.optBoolean("paymentIssue") else null,
