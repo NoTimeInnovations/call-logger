@@ -8,6 +8,10 @@
     <!-- Upload captured calls to the ingestion backend. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Ask to be exempted from battery optimisation so background call capture keeps
+         running when the app is terminated and the phone is locked (Doze). Core to a
+         call logger — otherwise Doze defers the sync worker for long stretches. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Only needed to write the exported .xlsx to Downloads on Android 9 and below;
          on Android 10+ the MediaStore API is used instead (no permission required). -->
     <uses-permission

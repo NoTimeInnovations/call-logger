@@ -16,9 +16,14 @@ import kotlinx.coroutines.launch
 
 /**
  * Fires on every phone-state change. When a call ends the device returns to the
- * IDLE state and the system writes the new call-log entry a moment later, so we
- * wait briefly and then sync it into the local database — giving near real-time
- * capture on top of the full sync that runs whenever the app is opened.
+ * IDLE state and the system writes the new call-log entry a moment later.
+ *
+ * We enqueue the WorkManager sync FIRST — it survives process death, runs after the
+ * app is terminated, re-scans the device call log itself, and retries — so a call
+ * that arrives while the app is dead / the phone is locked is still captured even if
+ * this receiver's process is killed a moment from now. The inline block below is then
+ * a best-effort low-latency attempt while we're already awake; if it loses the race
+ * (or is killed) the worker still does the job, and the local DB + server both dedupe.
  */
 class PhoneStateReceiver : BroadcastReceiver() {
 
@@ -28,6 +33,11 @@ class PhoneStateReceiver : BroadcastReceiver() {
         if (state != TelephonyManager.EXTRA_STATE_IDLE) return
 
         val appContext = context.applicationContext
+
+        // Reliable path first — guaranteed to be scheduled even if we're killed next.
+        CallSync.enqueueNow(appContext)
+
+        // Best-effort low-latency capture while the process is still awake.
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
@@ -35,12 +45,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 delay(2500)
                 val db = AppDatabase.getInstance(appContext)
                 CallRepository(appContext, db.callDao()).syncFromDeviceCallLog()
-                // Upload right now for low latency (no WorkManager scheduling delay)…
                 CallUploader.uploadPending(appContext)
-                // …and enqueue the worker as a retrying backup if that attempt failed/timed out.
-                CallSync.enqueueNow(appContext)
             } catch (_: Exception) {
-                // READ_CALL_LOG may be missing; nothing else to do.
+                // READ_CALL_LOG may be missing; the worker will retry regardless.
             } finally {
                 pending.finish()
             }

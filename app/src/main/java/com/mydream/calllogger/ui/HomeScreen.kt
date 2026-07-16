@@ -61,6 +61,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mydream.calllogger.export.DateRange
 import com.mydream.calllogger.export.Exporter
+import com.mydream.calllogger.prefs.SettingsManager
+import com.mydream.calllogger.util.BatteryOptimization
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +93,20 @@ fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
             context, Manifest.permission.READ_CALL_LOG
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) vm.onPermissionsResult(true) else launcher.launch(permissions)
+    }
+
+    // Once call access is granted, nudge (once) to exempt the app from battery
+    // optimisation so background capture keeps running when the app is terminated and
+    // the phone is locked (Doze) — otherwise the sync worker gets deferred for long
+    // stretches and calls show up late or only after the app is next opened.
+    LaunchedEffect(state.hasPermissions) {
+        if (state.hasPermissions) {
+            val settings = SettingsManager(context)
+            if (!settings.batteryPromptShown && !BatteryOptimization.isIgnoring(context)) {
+                settings.batteryPromptShown = true
+                BatteryOptimization.request(context)
+            }
+        }
     }
 
     // Re-sync whenever the app comes back to the foreground.

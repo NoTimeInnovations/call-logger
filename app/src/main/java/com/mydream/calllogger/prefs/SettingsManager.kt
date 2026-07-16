@@ -23,6 +23,13 @@ class SettingsManager(context: Context) {
     val isOnboardingComplete: Boolean
         get() = !prefs.getString(KEY_EMAIL, null).isNullOrBlank()
 
+    /** Whether we've already shown the battery-optimisation exemption prompt once. */
+    var batteryPromptShown: Boolean
+        get() = prefs.getBoolean(KEY_BATTERY_PROMPT_SHOWN, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_BATTERY_PROMPT_SHOWN, value).apply()
+        }
+
     fun reset() {
         prefs.edit().clear().apply()
     }
@@ -30,5 +37,6 @@ class SettingsManager(context: Context) {
     companion object {
         private const val KEY_EMAIL = "email"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
     }
 }
