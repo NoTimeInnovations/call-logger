@@ -17,7 +17,7 @@
  */
 
 import { hasura } from './hasura';
-import { advanceDueRuns, startFlowRunsForCalls, type NewCall } from './flow';
+import { advanceDueRuns, runFlowManually, startFlowRunsForCalls, type NewCall } from './flow';
 import { dispatchDueScheduledMessages } from './scheduler';
 import { getWhatsAppCreds } from './whatsapp';
 
@@ -800,6 +800,135 @@ async function handleAdminTemplates(request: Request, env: Env, url: URL): Promi
 }
 
 // ---------------------------------------------------------------------------
+// Manual "run this flow on a number" (partner from the app, superadmin from the panel)
+// ---------------------------------------------------------------------------
+
+/** POST /run-flow — a partner manually runs their flow on a number (device token). */
+async function handleRunFlow(request: Request, env: Env): Promise<Response> {
+  const auth = await authDevice(request, env);
+  if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
+  const parsed = await parseJson(request);
+  if (!parsed.ok) return parsed.res;
+  const number = asString(parsed.body.number, 32);
+  if (!number) return json({ error: 'number required' }, 400);
+  const name = asString(parsed.body.name, 120);
+  const result = await runFlowManually(env, auth.partnerId, auth.email, number, name);
+  return json(result, result.ok ? 200 : 400);
+}
+
+/** POST /admin/run-flow?partner=<id> — superadmin runs a partner's flow on a number. */
+async function handleAdminRunFlow(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!isAdmin(request, env)) return json({ error: 'unauthorized' }, 401);
+  const partnerId = url.searchParams.get('partner');
+  if (!partnerId) return json({ error: 'partner required' }, 400);
+  const parsed = await parseJson(request);
+  if (!parsed.ok) return parsed.res;
+  const number = asString(parsed.body.number, 32);
+  if (!number) return json({ error: 'number required' }, 400);
+  const name = asString(parsed.body.name, 120);
+  const result = await runFlowManually(
+    env,
+    partnerId,
+    asString(parsed.body.accountEmail, 254),
+    number,
+    name
+  );
+  return json(result, result.ok ? 200 : 400);
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp connection status (connected? which number? verified? billing?)
+// ---------------------------------------------------------------------------
+
+interface WaStatus {
+  connected: boolean;
+  number?: string | null;
+  phoneNumberId?: string | null;
+  wabaId?: string | null;
+  name?: string | null;
+  verified?: boolean;
+  businessVerificationStatus?: string | null;
+  accountReviewStatus?: string | null;
+  canSend?: string;
+  // Meta exposes no "is a payment method on file" field. The only signal is a payment
+  // PROBLEM blocking messaging (WABA health error 141006) — surfaced as paymentIssue.
+  paymentIssue?: boolean;
+  issues?: Array<{ code: number; description?: string | null }>;
+  error?: string;
+}
+
+/** Connection + number from Hasura; verification + billing signal live from Meta. */
+async function getWaStatus(env: Env, partnerId: string): Promise<WaStatus> {
+  const data = await hasura<{
+    whatsapp_business_integrations: Array<{
+      waba_id: string | null;
+      phone_number_id: string | null;
+      display_phone: string | null;
+      access_token: string | null;
+    }>;
+  }>(
+    env,
+    `query WaStatus($p: uuid!) {
+      whatsapp_business_integrations(
+        where: { partner_id: { _eq: $p } }
+        order_by: { is_primary: desc, updated_at: asc }
+        limit: 1
+      ) { waba_id phone_number_id display_phone access_token }
+    }`,
+    { p: partnerId }
+  );
+  const integ = data.whatsapp_business_integrations[0];
+  if (!integ?.phone_number_id) return { connected: false };
+
+  const base: WaStatus = {
+    connected: true,
+    number: integ.display_phone,
+    phoneNumberId: integ.phone_number_id,
+    wabaId: integ.waba_id,
+  };
+  if (!integ.waba_id || !integ.access_token) return base;
+
+  try {
+    const version = env.GRAPH_API_VERSION || 'v20.0';
+    const res = await fetch(
+      `https://graph.facebook.com/${version}/${integ.waba_id}?` +
+        new URLSearchParams({
+          fields: 'id,name,account_review_status,business_verification_status,health_status',
+          access_token: integ.access_token,
+        })
+    );
+    const d = (await res.json()) as any;
+    if (!res.ok) return { ...base, error: d?.error?.message || `meta ${res.status}` };
+    const entities: any[] = d?.health_status?.entities || [];
+    const issues = entities.flatMap((e: any) =>
+      (e.errors || []).map((err: any) => ({
+        code: err.error_code,
+        description: err.error_description ?? null,
+      }))
+    );
+    return {
+      ...base,
+      name: d?.name ?? null,
+      verified: d?.business_verification_status === 'verified',
+      businessVerificationStatus: d?.business_verification_status ?? null,
+      accountReviewStatus: d?.account_review_status ?? null,
+      canSend: d?.health_status?.can_send_message ?? 'UNKNOWN',
+      paymentIssue: issues.some((i: { code: number }) => i.code === 141006),
+      issues,
+    };
+  } catch (e) {
+    return { ...base, error: (e as Error).message };
+  }
+}
+
+/** GET /wa-status — a partner reads their own WhatsApp connection status (device token). */
+async function handleWaStatus(request: Request, env: Env): Promise<Response> {
+  const auth = await authDevice(request, env);
+  if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
+  return json(await getWaStatus(env, auth.partnerId));
+}
+
+// ---------------------------------------------------------------------------
 // Meta WhatsApp inbound webhook: records replies (for flow conditions) + opt-outs.
 // ---------------------------------------------------------------------------
 
@@ -912,6 +1041,8 @@ export default {
     if (p === '/flow' && method === 'GET') return handleGetFlow(request, env);
     if (p === '/flow' && method === 'PUT') return handlePutFlow(request, env);
     if (p === '/schedule' && (method === 'GET' || method === 'POST')) return handleSchedule(request, env);
+    if (p === '/run-flow' && method === 'POST') return handleRunFlow(request, env);
+    if (p === '/wa-status' && method === 'GET') return handleWaStatus(request, env);
 
     // Superadmin (ADMIN_API_KEY)
     if (p === '/admin/partners' && method === 'GET') return handleAdminPartners(request, env);
@@ -922,6 +1053,7 @@ export default {
     if (p === '/admin/schedule/targets' && method === 'GET') return handleAdminScheduleTargets(request, env, url);
     if (p === '/admin/messages' && method === 'GET') return handleAdminMessages(request, env, url);
     if (p === '/admin/templates' && method === 'GET') return handleAdminTemplates(request, env, url);
+    if (p === '/admin/run-flow' && method === 'POST') return handleAdminRunFlow(request, env, url);
 
     return json({ error: 'not found' }, 404);
   },

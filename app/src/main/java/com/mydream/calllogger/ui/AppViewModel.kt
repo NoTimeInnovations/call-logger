@@ -9,6 +9,10 @@ import com.mydream.calllogger.data.CallEntity
 import com.mydream.calllogger.data.CallRepository
 import com.mydream.calllogger.export.DateRange
 import com.mydream.calllogger.export.Exporter
+import com.mydream.calllogger.net.AccountManager
+import com.mydream.calllogger.net.FlowApi
+import com.mydream.calllogger.net.IngestClient
+import com.mydream.calllogger.net.WaStatus
 import com.mydream.calllogger.prefs.SettingsManager
 import com.mydream.calllogger.work.CallSync
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +34,9 @@ data class UiState(
     val calls: List<CallEntity> = emptyList(),
     val loading: Boolean = false,
     val message: String? = null,
-    val pendingShare: ShareInfo? = null
+    val pendingShare: ShareInfo? = null,
+    val waStatus: WaStatus? = null,
+    val runningFlow: Boolean = false
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -63,6 +69,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (callLogGranted) {
             sync()
             observeSelectedRange()
+            loadWaStatus()
         }
     }
 
@@ -76,6 +83,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!_state.value.hasPermissions) return
         sync()
         observeSelectedRange()
+        loadWaStatus()
     }
 
     private fun observeSelectedRange() {
@@ -124,6 +132,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _state.update { it.copy(message = "Export failed: ${e.message}") }
             }
+        }
+    }
+
+    /** Get the per-device token, registering one if needed (mirrors CallUploader). */
+    private suspend fun ensureToken(): String? = withContext(Dispatchers.IO) {
+        val account = AccountManager(getApplication())
+        var token = account.token
+        if (token.isNullOrBlank()) {
+            val email = settings.email
+            if (email.isNullOrBlank()) return@withContext null
+            token = IngestClient.register(email, settings.deviceId)
+            if (!token.isNullOrBlank()) account.token = token
+        }
+        token
+    }
+
+    /** Fetch WhatsApp connection / verification / billing status for the header card. */
+    fun loadWaStatus() {
+        viewModelScope.launch {
+            val status = withContext(Dispatchers.IO) {
+                val token = ensureToken() ?: return@withContext null
+                WaStatus.parse(FlowApi.getWaStatus(token))
+            }
+            if (status != null) _state.update { it.copy(waStatus = status) }
+        }
+    }
+
+    /** Manually run the configured flow on a number (a synthetic call). */
+    fun runFlow(number: String) {
+        val n = number.trim()
+        if (n.isBlank() || _state.value.runningFlow) return
+        viewModelScope.launch {
+            _state.update { it.copy(runningFlow = true) }
+            val (_, message) = withContext(Dispatchers.IO) {
+                val token = ensureToken()
+                    ?: return@withContext false to "Not connected yet — try again in a moment."
+                FlowApi.runFlow(token, n, null)
+            }
+            _state.update { it.copy(runningFlow = false, message = message) }
         }
     }
 

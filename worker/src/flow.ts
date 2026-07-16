@@ -78,7 +78,7 @@ export async function startFlowRunsForCalls(env: FlowEnv, calls: NewCall[]): Pro
     const partnerId = c.partner_id as string;
     let flow = flowCache.get(partnerId);
     if (flow === undefined) {
-      flow = await loadEnabledFlow(env, partnerId);
+      flow = await loadFlow(env, partnerId, true);
       flowCache.set(partnerId, flow);
     }
     if (!flow) continue;
@@ -107,13 +107,68 @@ export async function startFlowRunsForCalls(env: FlowEnv, calls: NewCall[]): Pro
   }
 }
 
-async function loadEnabledFlow(
+/** Normalize a user-typed number to E.164 (`+<digits>`). Requires a country code. */
+function normalizeE164(raw: string): string | null {
+  const digits = (raw || '').replace(/[^\d]/g, '');
+  if (digits.length < 8 || digits.length > 15) return null;
+  return `+${digits}`;
+}
+
+/**
+ * Manually start (and immediately fire) the partner's flow for a single number —
+ * a synthetic call. Runs the configured flow whether or not it's toggled "enabled"
+ * (an explicit action). Returns the new run id. Each manual run has its own id, so
+ * repeat runs re-send (the flow send-dedupe is per run, not per number).
+ */
+export async function runFlowManually(
   env: FlowEnv,
-  partnerId: string
+  partnerId: string,
+  accountEmail: string | null,
+  numberRaw: string,
+  name: string | null
+): Promise<{ ok: true; runId: string; contact: string } | { ok: false; error: string }> {
+  const contact = normalizeE164(numberRaw);
+  if (!contact) return { ok: false, error: 'Enter a valid phone number with country code (e.g. +9198…).' };
+
+  const flow = await loadFlow(env, partnerId, false);
+  if (!flow) return { ok: false, error: 'No flow is configured for this partner.' };
+
+  const res = await hasura<{ insert_flow_runs_one: { id: string } | null }>(
+    env,
+    `mutation RunManual($o: flow_runs_insert_input!) { insert_flow_runs_one(object: $o) { id } }`,
+    {
+      o: {
+        partner_id: partnerId,
+        account_email: accountEmail,
+        flow_id: flow.flow_id,
+        // call_log_id omitted → NULL (manual run, not tied to a call). The UNIQUE
+        // index on call_log_id allows many NULLs, so repeat manual runs are fine.
+        contact_e164: contact,
+        contact_name: name,
+        graph: flow.graph,
+        cursor_node_id: flow.start,
+        status: 'active',
+      },
+    }
+  );
+  const runId = res.insert_flow_runs_one?.id;
+  if (!runId) return { ok: false, error: 'Could not start the flow run.' };
+
+  // Fire the first step now; the cron remains the backstop for waits/retries.
+  await advanceDueRuns(env, new Date()).catch(() => {});
+  return { ok: true, runId, contact };
+}
+
+async function loadFlow(
+  env: FlowEnv,
+  partnerId: string,
+  requireEnabled: boolean
 ): Promise<{ flow_id: string; graph: Graph; start: string } | null> {
   const data = await hasura<{ call_flows: Array<{ id: string; graph: Graph; enabled: boolean }> }>(
     env,
-    `query F($p: uuid!) { call_flows(where: { partner_id: { _eq: $p }, enabled: { _eq: true } }, limit: 1) { id graph enabled } }`,
+    requireEnabled
+      ? `query F($p: uuid!) { call_flows(where: { partner_id: { _eq: $p }, enabled: { _eq: true } }, limit: 1) { id graph enabled } }`
+      : `query F($p: uuid!) { call_flows(where: { partner_id: { _eq: $p } }, limit: 1) { id graph enabled } }`,
     { p: partnerId }
   );
   const f = data.call_flows[0];

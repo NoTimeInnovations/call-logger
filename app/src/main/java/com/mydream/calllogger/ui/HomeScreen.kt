@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -47,7 +49,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import com.mydream.calllogger.net.WaStatus
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mydream.calllogger.export.DateRange
@@ -180,6 +186,14 @@ fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
                 onSelect = { vm.selectRange(it) }
             )
 
+            if (state.hasPermissions) {
+                WhatsAppCard(
+                    status = state.waStatus,
+                    running = state.runningFlow,
+                    onRun = { vm.runFlow(it) }
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -240,6 +254,104 @@ fun HomeScreen(vm: AppViewModel, onOpenFlowBuilder: () -> Unit = {}) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WhatsAppCard(status: WaStatus?, running: Boolean, onRun: (String) -> Unit) {
+    var number by rememberSaveable { mutableStateOf("") }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                "WhatsApp",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            when {
+                status == null -> Text(
+                    "Checking status…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                !status.connected -> Text(
+                    "Not connected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+
+                else -> {
+                    StatusRow("Connected number", status.number ?: "—")
+                    StatusRow(
+                        "Business verified",
+                        when (status.verified) {
+                            true -> "Yes"
+                            false -> "No"
+                            null -> "Unknown"
+                        }
+                    )
+                    StatusRow(
+                        "Billing",
+                        if (status.paymentIssue == true) "Problem — messaging blocked" else "No issues"
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Divider()
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "Run flow on a number",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = number,
+                    onValueChange = { number = it },
+                    placeholder = { Text("+9198…") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { onRun(number) },
+                    enabled = !running && number.isNotBlank()
+                ) {
+                    Text(if (running) "Running…" else "Run")
+                }
+            }
+            Text(
+                "Runs your saved flow on this number now. Include the country code.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+    }
+}
+
 @Composable
 private fun RangeChips(selected: DateRange, onSelect: (DateRange) -> Unit) {
     LazyRow(
