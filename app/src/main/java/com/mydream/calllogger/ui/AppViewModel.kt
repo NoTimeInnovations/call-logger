@@ -36,7 +36,6 @@ data class UiState(
     val message: String? = null,
     val pendingShare: ShareInfo? = null,
     val waStatus: WaStatus? = null,
-    val runningFlow: Boolean = false,
     val partnerId: String? = null
 )
 
@@ -173,21 +172,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val pid = _state.value.partnerId ?: account.partnerId ?: return null
         val token = account.token ?: return null
         return "https://menuthere.com/flow/$pid#$token"
-    }
-
-    /** Manually run the configured flow on a number (a synthetic call). */
-    fun runFlow(number: String) {
-        val n = number.trim()
-        if (n.isBlank() || _state.value.runningFlow) return
-        viewModelScope.launch {
-            _state.update { it.copy(runningFlow = true) }
-            val (_, message) = withContext(Dispatchers.IO) {
-                val token = ensureToken()
-                    ?: return@withContext false to "Not connected yet — try again in a moment."
-                FlowApi.runFlow(token, n, null)
-            }
-            _state.update { it.copy(runningFlow = false, message = message) }
-        }
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
