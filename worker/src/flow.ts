@@ -37,6 +37,7 @@ interface RunRow {
   graph: Graph;
   cursor_node_id: string;
   created_at: string;
+  call_log_id: string | null;
 }
 
 /** A call row that just landed (from the queue consumer). */
@@ -229,7 +230,7 @@ async function claimRun(
         where: { id: { _eq: $id }, status: { _eq: "active" },
                  _or: [{ lease_until: { _is_null: true } }, { lease_until: { _lt: $now } }] }
         _set: { lease_until: $lease, claimed_at: $now }
-      ) { returning { id partner_id account_email contact_e164 contact_name graph cursor_node_id created_at } }
+      ) { returning { id partner_id account_email contact_e164 contact_name graph cursor_node_id created_at call_log_id } }
     }`,
     { id, now: nowIso, lease: leaseIso }
   );
@@ -255,8 +256,16 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
       return scheduleNext(env, run.id, next, dueAt);
     } else if (node.type === 'condition') {
       const check = String(node.data?.check ?? 'not_replied');
-      const replied = await hasReplied(env, run.contact_e164, run.created_at);
-      const satisfied = check === 'replied' ? replied : !replied;
+      let satisfied: boolean;
+      if (check === 'missed' || check === 'incoming' || check === 'outgoing') {
+        // Branch on the TYPE of the call that triggered this run. Manual runs have
+        // no call (call_log_id null) → these take the "false" (else) leg.
+        satisfied = (await getCallType(env, run.call_log_id)) === check;
+      } else {
+        // replied / not_replied: did the contact reply on WhatsApp since the run started?
+        const replied = await hasReplied(env, run.contact_e164, run.created_at);
+        satisfied = check === 'replied' ? replied : !replied;
+      }
       cursor = nextNodeId(g, node.id, satisfied ? 'true' : 'false');
     } else {
       // trigger / unknown -> pass through
@@ -266,6 +275,17 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
   }
   // Too many steps (malformed graph) — stop safely.
   return finishRun(env, run.id, 'done');
+}
+
+/** The call_type of the call that started a run ('incoming'|'outgoing'|'missed'|…), or null. */
+async function getCallType(env: FlowEnv, callLogId: string | null): Promise<string | null> {
+  if (!callLogId) return null;
+  const d = await hasura<{ call_logs_by_pk: { call_type: string | null } | null }>(
+    env,
+    `query CallType($id: uuid!) { call_logs_by_pk(id: $id) { call_type } }`,
+    { id: callLogId }
+  );
+  return d.call_logs_by_pk?.call_type ?? null;
 }
 
 /** Whether the contact has replied on WhatsApp since the run started (inbound webhook). */

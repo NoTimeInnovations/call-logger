@@ -371,7 +371,28 @@ private fun WaitEditor(node: FlowNode, vm: FlowBuilderViewModel) {
 
 @Composable
 private fun ConditionEditor(node: FlowNode, vm: FlowBuilderViewModel) {
-    Text("Check whether the caller replied on WhatsApp.", style = MaterialTheme.typography.bodyMedium)
+    Text(
+        "Branch on the call type, or on whether the caller replied on WhatsApp.",
+        style = MaterialTheme.typography.bodyMedium
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = node.check == "missed",
+            onClick = { vm.updateCondition(node.id, "missed") },
+            label = { Text("Missed") }
+        )
+        FilterChip(
+            selected = node.check == "incoming",
+            onClick = { vm.updateCondition(node.id, "incoming") },
+            label = { Text("Incoming") }
+        )
+        FilterChip(
+            selected = node.check == "outgoing",
+            onClick = { vm.updateCondition(node.id, "outgoing") },
+            label = { Text("Outgoing") }
+        )
+    }
     Spacer(Modifier.height(8.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(

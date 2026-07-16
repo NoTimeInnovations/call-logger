@@ -254,10 +254,13 @@ function Inspector({ node, patch, onDelete, partnerId }: { node: Node; patch: (d
       {kind === 'condition' && (
         <Field label="Check">
           <select className="border rounded px-2 py-1 w-full" value={String(node.data.check ?? 'not_replied')} onChange={(e) => patch({ check: e.target.value })}>
+            <option value="missed">Missed call</option>
+            <option value="incoming">Incoming call</option>
+            <option value="outgoing">Outgoing call</option>
             <option value="not_replied">Not replied</option>
             <option value="replied">Replied</option>
           </select>
-          <p className="text-xs text-gray-400">Green dot = yes, red dot = no.</p>
+          <p className="text-xs text-gray-400">Branches on the call type (or WhatsApp reply). Green dot = matches, red = doesn&apos;t.</p>
         </Field>
       )}
     </div>
