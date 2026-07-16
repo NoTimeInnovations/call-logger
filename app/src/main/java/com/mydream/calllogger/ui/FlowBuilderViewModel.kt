@@ -54,7 +54,8 @@ class FlowBuilderViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val raw = withContext(Dispatchers.IO) { FlowApi.getFlow(token) }
-            val graph = raw?.let { runCatching { FlowJson.parse(it) }.getOrNull() } ?: FlowJson.starter()
+            val graph = raw?.let { runCatching { FlowJson.parse(it) }.getOrNull() }
+                ?.takeIf { it.nodes.isNotEmpty() } ?: FlowJson.starter()
             if (graph.nodes.none { it.type == NodeType.TRIGGER }) {
                 graph.nodes.add(0, FlowNode(id = "trigger", type = NodeType.TRIGGER, x = 40f, y = 40f))
             }

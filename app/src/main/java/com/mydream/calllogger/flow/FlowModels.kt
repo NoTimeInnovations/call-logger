@@ -25,6 +25,7 @@ data class FlowNode(
     var template: String = "",
     var language: String = "en",
     var params: List<String> = emptyList(),
+    var headerImage: String = "",
     // wait
     var waitSeconds: Long = 86_400,
     // condition
@@ -55,6 +56,7 @@ object FlowJson {
                     data.put("template", n.template)
                     data.put("language", n.language)
                     data.put("params", JSONArray(n.params))
+                    if (n.headerImage.isNotBlank()) data.put("headerImage", n.headerImage)
                 }
                 NodeType.WAIT -> data.put("seconds", n.waitSeconds)
                 NodeType.CONDITION -> data.put("check", n.check)
@@ -107,6 +109,7 @@ object FlowJson {
                 } ?: emptyList(),
                 waitSeconds = data.optLong("seconds", 86_400),
                 check = data.optString("check", "not_replied"),
+                headerImage = data.optString("headerImage", ""),
             )
             g.nodes.add(node)
         }
@@ -120,7 +123,26 @@ object FlowJson {
         return g
     }
 
-    /** A fresh graph containing just the fixed trigger node. */
-    fun starter(): FlowGraph =
-        FlowGraph(nodes = mutableListOf(FlowNode(id = "trigger", type = NodeType.TRIGGER, x = 40f, y = 40f)))
+    /**
+     * The default a new flow starts with: on an inbound call → if missed, send now;
+     * else if incoming (answered), send after 23h; else send nothing. Outgoing calls
+     * never start a flow. The partner sets the send template.
+     */
+    fun starter(): FlowGraph = FlowGraph(
+        nodes = mutableListOf(
+            FlowNode(id = "trigger", type = NodeType.TRIGGER, x = 40f, y = 40f),
+            FlowNode(id = "c_missed", type = NodeType.CONDITION, x = 40f, y = 180f, check = "missed"),
+            FlowNode(id = "s_missed", type = NodeType.SEND, x = 40f, y = 320f, template = "call_follow_up"),
+            FlowNode(id = "c_incoming", type = NodeType.CONDITION, x = 280f, y = 320f, check = "incoming"),
+            FlowNode(id = "w_incoming", type = NodeType.WAIT, x = 280f, y = 460f, waitSeconds = 82_800),
+            FlowNode(id = "s_incoming", type = NodeType.SEND, x = 280f, y = 600f, template = "call_follow_up"),
+        ),
+        edges = mutableListOf(
+            FlowEdge("trigger", "c_missed"),
+            FlowEdge("c_missed", "s_missed", "true"),
+            FlowEdge("c_missed", "c_incoming", "false"),
+            FlowEdge("c_incoming", "w_incoming", "true"),
+            FlowEdge("w_incoming", "s_incoming"),
+        ),
+    )
 }
