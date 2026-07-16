@@ -294,7 +294,11 @@ private fun WhatsAppCard(status: WaStatus?, running: Boolean, onRun: (String) ->
                     )
                     StatusRow(
                         "Billing",
-                        if (status.paymentIssue == true) "Problem — messaging blocked" else "No issues"
+                        when (status.paymentIssue) {
+                            true -> "Problem — messaging blocked"
+                            false -> "No issues"
+                            null -> "Unknown"
+                        }
                     )
                 }
             }
