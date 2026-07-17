@@ -75,7 +75,11 @@ class FlowWebViewActivity : ComponentActivity() {
                             WebView(ctx).apply {
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
-                                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                // Always fetch the latest editor from the network — the flow
+                                // page changes server-side, and a stale cached copy would show
+                                // an old (broken) layout. Purge any existing cache too.
+                                settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                                clearCache(true)
                                 webViewClient = WebViewClient()
                                 loadUrl(target)
                                 webView = this
