@@ -12,6 +12,8 @@
          running when the app is terminated and the phone is locked (Doze). Core to a
          call logger — otherwise Doze defers the sync worker for long stretches. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Install the downloaded APK for in-app OTA updates. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Only needed to write the exported .xlsx to Downloads on Android 9 and below;
          on Android 10+ the MediaStore API is used instead (no permission required). -->
     <uses-permission

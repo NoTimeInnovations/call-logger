@@ -38,6 +38,9 @@ jobs:
         env:
           INGEST_BASE_URL: ${{ secrets.INGEST_BASE_URL }}
           INGEST_APP_KEY: ${{ secrets.INGEST_APP_KEY }}
+          # Drives versionCode/versionName so it matches the v1.0.<run> release tag
+          # that the in-app OTA updater compares against.
+          GH_RUN_NUMBER: ${{ github.run_number }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Stage APK with versioned name

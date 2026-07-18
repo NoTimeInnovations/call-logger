@@ -18,6 +18,11 @@ val ingestProps = Properties().apply {
 fun ingestProp(key: String, default: String): String =
     ingestProps.getProperty(key) ?: System.getenv(key) ?: default
 
+// Version is driven by the GitHub Actions run number so it lines up 1:1 with the
+// release tag (v1.0.<run>) — the in-app OTA updater compares this to the latest
+// GitHub release. Local builds (no env) fall back to 1.
+val ghRunNumber = System.getenv("GH_RUN_NUMBER")?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.mydream.calllogger"
     compileSdk = 34
@@ -26,8 +31,8 @@ android {
         applicationId = "com.mydream.calllogger"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = ghRunNumber
+        versionName = "1.0.$ghRunNumber"
         vectorDrawables { useSupportLibrary = true }
 
         // Cloudflare Worker ingest endpoint + shared app key (from local.properties / env).

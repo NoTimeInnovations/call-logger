@@ -4,4 +4,6 @@
     <external-path name="downloads" path="Download" />
     <cache-path name="cache" path="." />
     <files-path name="files" path="." />
+    <!-- Where the OTA updater downloads the new APK (getExternalFilesDir/Download). -->
+    <external-files-path name="update" path="Download/" />
 </paths>

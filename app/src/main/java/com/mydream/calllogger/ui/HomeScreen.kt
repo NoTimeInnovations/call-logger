@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +45,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -141,6 +143,16 @@ fun HomeScreen(vm: AppViewModel) {
             context.startActivity(Intent.createChooser(intent, "Share ${share.fileName}"))
             vm.consumeShare()
         }
+    }
+
+    state.update?.let { update ->
+        AlertDialog(
+            onDismissRequest = { vm.dismissUpdate() },
+            title = { Text("Update available") },
+            text = { Text("A newer version (${update.versionName}) of Call Logger is available. Update now?") },
+            confirmButton = { TextButton(onClick = { vm.installUpdate() }) { Text("Update") } },
+            dismissButton = { TextButton(onClick = { vm.dismissUpdate() }) { Text("Later") } },
+        )
     }
 
     Scaffold(

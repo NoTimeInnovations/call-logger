@@ -9,9 +9,12 @@ import com.mydream.calllogger.data.CallEntity
 import com.mydream.calllogger.data.CallRepository
 import com.mydream.calllogger.export.DateRange
 import com.mydream.calllogger.export.Exporter
+import com.mydream.calllogger.AppUpdater
+import com.mydream.calllogger.BuildConfig
 import com.mydream.calllogger.net.AccountManager
 import com.mydream.calllogger.net.FlowApi
 import com.mydream.calllogger.net.IngestClient
+import com.mydream.calllogger.net.UpdateChecker
 import com.mydream.calllogger.net.WaStatus
 import com.mydream.calllogger.prefs.SettingsManager
 import com.mydream.calllogger.work.CallSync
@@ -37,7 +40,8 @@ data class UiState(
     val pendingShare: ShareInfo? = null,
     val waStatus: WaStatus? = null,
     val partnerId: String? = null,
-    val active: Boolean = true
+    val active: Boolean = true,
+    val update: UpdateChecker.Update? = null
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -59,6 +63,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var callsJob: Job? = null
+
+    init {
+        checkForUpdate()
+    }
 
     fun saveEmail(rawEmail: String) {
         val email = rawEmail.trim()
@@ -195,6 +203,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** Check GitHub Releases for a newer build; shows the update dialog if one exists. */
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            val update = withContext(Dispatchers.IO) { UpdateChecker.check(BuildConfig.VERSION_CODE) }
+            if (update != null) _state.update { it.copy(update = update) }
+        }
+    }
+
+    /** Download + install the pending update via the system installer. */
+    fun installUpdate() {
+        val update = _state.value.update ?: return
+        AppUpdater.downloadAndInstall(getApplication(), update.apkUrl)
+        _state.update { it.copy(update = null) }
+    }
+
+    fun dismissUpdate() = _state.update { it.copy(update = null) }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }
     fun consumeShare() = _state.update { it.copy(pendingShare = null) }
