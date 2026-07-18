@@ -86,6 +86,22 @@ CREATE TABLE IF NOT EXISTS public.wa_sends (
 );
 CREATE INDEX IF NOT EXISTS wa_sends_partner_idx ON public.wa_sends (partner_id, created_at DESC);
 
+-- Per-contact rate limit: one call-triggered follow-up per (partner, contact) per rolling
+-- 24h. executeSend claims this row with a single conditional upsert BEFORE sending:
+--   INSERT ... ON CONFLICT (partner_id,to_e164) DO UPDATE SET last_sent_at=now(), flow_run_id=$run
+--     WHERE last_sent_at < now()-'24h' OR flow_run_id = $run   -- expired window, or same run
+-- ON CONFLICT takes a row lock, so two calls from the same number racing into the send node
+-- serialize and exactly one wins (the other's upsert is a no-op → returns null → suppressed).
+-- The row is DELETEd if the winner's send fails/opts-out, so a non-delivered attempt doesn't
+-- block the contact for 24h. Admin/worker access only (no row perms granted).
+CREATE TABLE IF NOT EXISTS public.wa_flow_contact_window (
+  partner_id   uuid        NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  to_e164      text        NOT NULL,
+  last_sent_at timestamptz NOT NULL DEFAULT now(),
+  flow_run_id  uuid,
+  CONSTRAINT wa_flow_contact_window_pkey PRIMARY KEY (partner_id, to_e164)
+);
+
 -- Bulk scheduled messages to called customers (all or a selected list).
 CREATE TABLE IF NOT EXISTS public.scheduled_messages (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),

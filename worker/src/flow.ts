@@ -305,8 +305,21 @@ async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<v
   const template = String(node.data?.template ?? '').trim();
   if (!template) return;
   const language = String(node.data?.language ?? 'en');
-  const dedupeKey = `flowrun:${run.id}:${node.id}`;
 
+  // One follow-up per contact per rolling 24h. For call-triggered runs, atomically claim
+  // this contact's 24h window BEFORE sending: if another call already holds it (and it
+  // hasn't expired), this repeat call is suppressed and sends nothing — so a customer who
+  // calls several times a day gets a single message. The claim is a single conditional
+  // upsert (Postgres ON CONFLICT ... WHERE takes a row lock), so two calls from the same
+  // number that race into the send node resolve to exactly one winner. Manual runs (no
+  // call_log_id) are explicit admin actions and bypass the cap.
+  const gated = !!(run.call_log_id && run.partner_id && run.contact_e164);
+  if (gated) {
+    const claimed = await claimContactWindow(env, run.partner_id!, run.contact_e164!, run.id);
+    if (!claimed) return; // repeat within 24h — suppressed, nothing sent
+  }
+
+  const dedupeKey = `flowrun:${run.id}:${node.id}`;
   // Claim this exact step by inserting a pending row; on conflict we already handled it.
   const claim = await hasura<{ insert_wa_sends_one: { id: string } | null }>(
     env,
@@ -333,6 +346,8 @@ async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<v
 
   if (await isOptedOut(env, run.contact_e164)) {
     await updateSend(env, sendId, 'failed', null, 'opted_out');
+    // Never messaged — free the window so a later call to a re-subscribed contact isn't blocked.
+    if (gated) await releaseContactWindow(env, run.partner_id!, run.contact_e164!, run.id);
     return;
   }
 
@@ -361,6 +376,83 @@ async function executeSend(env: FlowEnv, run: RunRow, node: FlowNode): Promise<v
     await updateSend(env, sendId, 'sent', mid, null);
   } catch (e) {
     await updateSend(env, sendId, 'failed', null, (e as Error).message);
+    // Send failed — release the window so this contact isn't blocked for 24h by a
+    // message that never arrived; the next call re-claims and tries again.
+    if (gated) await releaseContactWindow(env, run.partner_id!, run.contact_e164!, run.id);
+  }
+}
+
+/**
+ * Atomically claim [e164]'s rolling-24h window for [runId]. Returns true if this run may
+ * send, false if another call already holds the window (repeat within 24h → suppress).
+ * A single conditional upsert does it: ON CONFLICT DO UPDATE ... WHERE (window expired OR
+ * same run). Postgres locks the conflicting row during ON CONFLICT, so concurrent runs for
+ * the same (partner, contact) serialize and exactly one wins — no read-then-write race.
+ * The `OR flow_run_id = $run` arm lets a single flow with multiple send nodes re-send.
+ */
+async function claimContactWindow(
+  env: FlowEnv,
+  partnerId: string,
+  e164: string,
+  runId: string
+): Promise<boolean> {
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const cutoff = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+  const d = await hasura<{ insert_wa_flow_contact_window_one: { flow_run_id: string | null } | null }>(
+    env,
+    `mutation Claim($p: uuid!, $to: String!, $now: timestamptz!, $cutoff: timestamptz!, $run: uuid!) {
+      insert_wa_flow_contact_window_one(
+        object: { partner_id: $p, to_e164: $to, last_sent_at: $now, flow_run_id: $run },
+        on_conflict: {
+          constraint: wa_flow_contact_window_pkey,
+          update_columns: [last_sent_at, flow_run_id],
+          where: { _or: [{ last_sent_at: { _lt: $cutoff } }, { flow_run_id: { _eq: $run } }] }
+        }
+      ) { flow_run_id }
+    }`,
+    { p: partnerId, to: e164, now, cutoff, run: runId },
+    true
+  );
+  return d.insert_wa_flow_contact_window_one != null;
+}
+
+/** Release a 24h window held by [runId] (after a failed/opted-out send) so the contact
+ *  isn't blocked for 24h by a message that never went out. Best-effort.
+ *
+ *  Guard: if this run already delivered a message (a multi-send flow whose EARLIER node
+ *  sent successfully, and only a LATER node failed), the window is backing a real send and
+ *  must NOT be revoked — otherwise the next call would be a duplicate. Only release when
+ *  this run has no successful send. The delete is also keyed on flow_run_id so it can only
+ *  ever drop a window this run currently holds. */
+async function releaseContactWindow(
+  env: FlowEnv,
+  partnerId: string,
+  e164: string,
+  runId: string
+): Promise<void> {
+  try {
+    const s = await hasura<{ wa_sends: Array<{ id: string }> }>(
+      env,
+      `query Sent($run: uuid!) {
+        wa_sends(where: { flow_run_id: { _eq: $run }, status: { _eq: "sent" } }, limit: 1) { id }
+      }`,
+      { run: runId },
+      true
+    );
+    if (s.wa_sends.length) return; // this run already delivered — keep the window
+    await hasura(
+      env,
+      `mutation Rel($p: uuid!, $to: String!, $run: uuid!) {
+        delete_wa_flow_contact_window(
+          where: { partner_id: { _eq: $p }, to_e164: { _eq: $to }, flow_run_id: { _eq: $run } }
+        ) { affected_rows }
+      }`,
+      { p: partnerId, to: e164, run: runId },
+      true
+    );
+  } catch {
+    /* best-effort */
   }
 }
 
