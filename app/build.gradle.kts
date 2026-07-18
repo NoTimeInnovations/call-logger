@@ -40,6 +40,23 @@ android {
         buildConfigField("String", "INGEST_APP_KEY", "\"${ingestProp("INGEST_APP_KEY", "")}\"")
     }
 
+    signingConfigs {
+        // A fixed keystore committed to the repo (whitelisted in .gitignore via
+        // !debug.keystore) so EVERY build — every developer machine and every CI run —
+        // is signed with the SAME key. Android only lets an app update in place when the
+        // signing certificate is unchanged, so the throwaway debug keystore that Gradle
+        // auto-generates per machine/CI-run breaks the in-app OTA updates: each release
+        // would have a different signature and refuse to install over the last. This is a
+        // dedicated signing key for this internal, sideloaded app (not a Play Store key),
+        // so committing it is an accepted trade-off for reproducible, update-safe signing.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "calllogger"
+            keyAlias = "call-logger"
+            keyPassword = "calllogger"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
