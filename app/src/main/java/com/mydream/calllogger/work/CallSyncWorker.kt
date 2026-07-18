@@ -26,6 +26,8 @@ class CallSyncWorker(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        // Master switch OFF → do nothing (don't retry).
+        if (!com.mydream.calllogger.prefs.SettingsManager(applicationContext).active) return Result.success()
         // 1) Pull any new calls from the device call log into the local DB. Best-effort:
         //    READ_CALL_LOG could be revoked — still upload whatever is already stored.
         try {

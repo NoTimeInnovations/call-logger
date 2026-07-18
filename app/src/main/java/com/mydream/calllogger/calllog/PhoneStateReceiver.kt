@@ -34,6 +34,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
 
         val appContext = context.applicationContext
 
+        // Master switch OFF → don't capture or upload anything.
+        if (!com.mydream.calllogger.prefs.SettingsManager(appContext).active) return
+
         // Reliable path first — guaranteed to be scheduled even if we're killed next.
         CallSync.enqueueNow(appContext)
 

@@ -36,7 +36,8 @@ data class UiState(
     val message: String? = null,
     val pendingShare: ShareInfo? = null,
     val waStatus: WaStatus? = null,
-    val partnerId: String? = null
+    val partnerId: String? = null,
+    val active: Boolean = true
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -51,7 +52,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         UiState(
             onboardingComplete = settings.isOnboardingComplete,
             email = settings.email.orEmpty(),
-            partnerId = account.partnerId
+            partnerId = account.partnerId,
+            active = settings.active
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -99,7 +101,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sync() {
-        if (!_state.value.hasPermissions) return
+        if (!_state.value.hasPermissions || !settings.active) return
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
             try {
@@ -172,6 +174,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val pid = _state.value.partnerId ?: account.partnerId ?: return null
         val token = account.token ?: return null
         return "https://menuthere.com/flow/$pid#$token"
+    }
+
+    /** Master switch — pause/resume call syncing AND the WhatsApp follow-up flow. */
+    fun setActive(active: Boolean) {
+        settings.active = active
+        _state.update { it.copy(active = active) }
+        val app = getApplication<Application>()
+        if (active) {
+            CallSync.schedulePeriodic(app)
+            if (_state.value.hasPermissions) sync()
+        } else {
+            CallSync.cancelAll(app)
+        }
+        // Enable/disable the flow server-side so it actually stops/starts sending.
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val token = ensureToken() ?: return@withContext
+                FlowApi.setFlowEnabled(token, active)
+            }
+        }
     }
 
     fun consumeMessage() = _state.update { it.copy(message = null) }

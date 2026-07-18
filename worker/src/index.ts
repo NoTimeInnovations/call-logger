@@ -930,6 +930,23 @@ async function handleWaStatus(request: Request, env: Env): Promise<Response> {
   return json({ ...status, partnerId: auth.partnerId });
 }
 
+/** POST /flow-enabled — the app's master switch enables/disables the partner's flow. */
+async function handleFlowEnabled(request: Request, env: Env): Promise<Response> {
+  const auth = await authDevice(request, env);
+  if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
+  const parsed = await parseJson(request);
+  if (!parsed.ok) return parsed.res;
+  const enabled = parsed.body.enabled === true;
+  await hasura(
+    env,
+    `mutation SetEnabled($p: uuid!, $e: Boolean!) {
+      update_call_flows(where: { partner_id: { _eq: $p } }, _set: { enabled: $e }) { affected_rows }
+    }`,
+    { p: auth.partnerId, e: enabled }
+  );
+  return json({ ok: true, enabled });
+}
+
 // ---------------------------------------------------------------------------
 // Meta WhatsApp inbound webhook: records replies (for flow conditions) + opt-outs.
 // ---------------------------------------------------------------------------
@@ -1045,6 +1062,7 @@ export default {
     if (p === '/schedule' && (method === 'GET' || method === 'POST')) return handleSchedule(request, env);
     if (p === '/run-flow' && method === 'POST') return handleRunFlow(request, env);
     if (p === '/wa-status' && method === 'GET') return handleWaStatus(request, env);
+    if (p === '/flow-enabled' && method === 'POST') return handleFlowEnabled(request, env);
 
     // Superadmin (ADMIN_API_KEY)
     if (p === '/admin/partners' && method === 'GET') return handleAdminPartners(request, env);

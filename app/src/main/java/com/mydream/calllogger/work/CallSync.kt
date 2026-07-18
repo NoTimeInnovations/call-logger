@@ -31,6 +31,13 @@ object CallSync {
             .enqueueUniqueWork(UNIQUE_ONESHOT, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 
+    /** Stop all scheduled call syncing — used when the master switch is turned OFF. */
+    fun cancelAll(context: Context) {
+        val wm = WorkManager.getInstance(context)
+        wm.cancelUniqueWork(UNIQUE_PERIODIC)
+        wm.cancelUniqueWork(UNIQUE_ONESHOT)
+    }
+
     /** Safety net so anything missed still uploads within ~15 minutes. */
     fun schedulePeriodic(context: Context) {
         val request = PeriodicWorkRequestBuilder<CallSyncWorker>(15, TimeUnit.MINUTES)

@@ -30,6 +30,13 @@ class SettingsManager(context: Context) {
             prefs.edit().putBoolean(KEY_BATTERY_PROMPT_SHOWN, value).apply()
         }
 
+    /** Master switch: when false, the app stops syncing calls and pauses the flow. Default on. */
+    var active: Boolean
+        get() = prefs.getBoolean(KEY_ACTIVE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_ACTIVE, value).apply()
+        }
+
     fun reset() {
         prefs.edit().clear().apply()
     }
@@ -38,5 +45,6 @@ class SettingsManager(context: Context) {
         private const val KEY_EMAIL = "email"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
+        private const val KEY_ACTIVE = "active"
     }
 }

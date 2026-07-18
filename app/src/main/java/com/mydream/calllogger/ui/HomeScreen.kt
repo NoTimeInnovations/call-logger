@@ -41,6 +41,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -163,6 +165,19 @@ fun HomeScreen(vm: AppViewModel) {
                     }
                 },
                 actions = {
+                    // Master switch — pause/resume call syncing + the WhatsApp flow.
+                    Switch(
+                        checked = state.active,
+                        onCheckedChange = { vm.setActive(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                            checkedTrackColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.45f),
+                            checkedBorderColor = MaterialTheme.colorScheme.onPrimary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                            uncheckedTrackColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
+                            uncheckedBorderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f),
+                        )
+                    )
                     IconButton(onClick = {
                         val url = vm.flowEditorUrl()
                         if (url != null) FlowWebViewActivity.start(context, url) else vm.loadWaStatus()
