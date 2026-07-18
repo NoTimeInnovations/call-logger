@@ -48,13 +48,15 @@ object IngestClient {
     }
 
     /** Uploads calls using a per-device [token]. Returns the HTTP status code, or -1 on error. */
-    fun ingest(token: String, deviceId: String, calls: List<CallEntity>): Int {
+    fun ingest(token: String, deviceId: String, calls: List<CallEntity>, flowBaselineMs: Long = 0L): Int {
         val base = BuildConfig.INGEST_BASE_URL.trimEnd('/')
         if (base.isBlank() || token.isBlank() || calls.isEmpty()) return -1
 
         val payload = JSONObject().apply {
             put("deviceId", deviceId)
             put("appVersion", BuildConfig.VERSION_NAME)
+            // Server gates follow-up flows to calls at/after this install baseline.
+            if (flowBaselineMs > 0L) put("flowBaselineMs", flowBaselineMs)
             put("calls", JSONArray().apply {
                 for (c in calls) {
                     put(JSONObject().apply {

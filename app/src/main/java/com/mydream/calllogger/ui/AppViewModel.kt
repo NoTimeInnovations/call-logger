@@ -71,6 +71,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun saveEmail(rawEmail: String) {
         val email = rawEmail.trim()
         settings.email = email
+        // Mark "now" as the flow baseline: only calls from this point on start follow-up
+        // flows. Anything already in the device call log is pre-install history and must
+        // not message past callers when it's uploaded.
+        settings.ensureFlowBaseline(System.currentTimeMillis())
         _state.update { it.copy(onboardingComplete = true, email = email) }
         // Upload any calls captured before onboarding, now that we have an account.
         CallSync.enqueueNow(getApplication())

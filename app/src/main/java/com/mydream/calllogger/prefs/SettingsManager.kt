@@ -37,6 +37,25 @@ class SettingsManager(context: Context) {
             prefs.edit().putBoolean(KEY_ACTIVE, value).apply()
         }
 
+    /**
+     * Epoch-ms captured at onboarding. Calls that happened BEFORE this are pre-install
+     * history and must not trigger follow-up flows — the server gates on it so a fresh
+     * install (which uploads the whole call log at once) never messages past callers.
+     * 0 until set (older installs / already-onboarded users => server does not gate).
+     */
+    var flowBaselineMs: Long
+        get() = prefs.getLong(KEY_FLOW_BASELINE_MS, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_FLOW_BASELINE_MS, value).apply()
+        }
+
+    /** Sets the flow baseline to [nowMs] once, on first onboarding; never moves it later. */
+    fun ensureFlowBaseline(nowMs: Long) {
+        if (prefs.getLong(KEY_FLOW_BASELINE_MS, 0L) <= 0L) {
+            prefs.edit().putLong(KEY_FLOW_BASELINE_MS, nowMs).apply()
+        }
+    }
+
     fun reset() {
         prefs.edit().clear().apply()
     }
@@ -46,5 +65,6 @@ class SettingsManager(context: Context) {
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
         private const val KEY_ACTIVE = "active"
+        private const val KEY_FLOW_BASELINE_MS = "flow_baseline_ms"
     }
 }

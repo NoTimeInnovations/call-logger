@@ -37,7 +37,7 @@ object CallUploader {
             while (true) {
                 val batch = repo.unsynced(BATCH_SIZE)
                 if (batch.isEmpty()) break
-                when (IngestClient.ingest(token!!, settings.deviceId, batch)) {
+                when (IngestClient.ingest(token!!, settings.deviceId, batch, settings.flowBaselineMs)) {
                     in 200..299 -> repo.markSynced(batch.map { it.id })
                     401 -> {
                         account.clear() // token revoked -> re-register next run

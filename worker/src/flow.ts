@@ -48,6 +48,7 @@ export interface NewCall {
   number_e164: string | null;
   cached_name: string | null;
   direction: string;
+  started_at: string; // ISO-8601 UTC — used to gate flows to post-install calls
 }
 
 const MAX_STEPS = 25; // guard against malformed cyclic graphs

@@ -336,6 +336,12 @@ async function handleIngest(request: Request, env: Env, ctx: ExecutionContext): 
 
   const deviceId = asString(body.deviceId, 128);
   const appVersion = asString(body.appVersion, 32);
+  // Install baseline (epoch ms) the app captured when it was first set up on this device.
+  // Calls that happened BEFORE this are pre-install history and must NOT start follow-up
+  // flows — otherwise a fresh install (which uploads the whole call log at once) would
+  // fire a follow-up to every past caller. Absent/0 (older clients) => no gating.
+  const flowBaselineMs = Number(body.flowBaselineMs);
+  const hasBaseline = Number.isFinite(flowBaselineMs) && flowBaselineMs > 0;
 
   const records: CallRecord[] = [];
   for (const c of calls) {
@@ -359,10 +365,18 @@ async function handleIngest(request: Request, env: Env, ctx: ExecutionContext): 
 
   try {
     const inserted = await insertCalls(env, deduped);
-    // Trigger follow-up flows for newly-recorded inbound calls (best-effort).
-    if (inserted.length) {
+    // Trigger follow-up flows for newly-recorded inbound calls (best-effort) — but only
+    // for calls at/after the device's install baseline, so a first-install history dump
+    // never backfills follow-ups to old callers.
+    const eligible = hasBaseline
+      ? inserted.filter((c) => {
+          const t = Date.parse(c.started_at);
+          return Number.isFinite(t) && t >= flowBaselineMs;
+        })
+      : inserted;
+    if (eligible.length) {
       try {
-        await startFlowRunsForCalls(env, inserted);
+        await startFlowRunsForCalls(env, eligible);
         // Send the immediate step now (after responding) instead of waiting for the
         // every-minute cron — the cron remains the safety net for waits/retries.
         ctx.waitUntil(
@@ -387,7 +401,7 @@ async function insertCalls(env: Env, objects: CallRecord[]): Promise<NewCall[]> 
   insert_call_logs(
     objects: $objects,
     on_conflict: { constraint: call_logs_account_email_event_key_key, update_columns: [] }
-  ) { returning { id partner_id account_email number_e164 cached_name direction } }
+  ) { returning { id partner_id account_email number_e164 cached_name direction started_at } }
 }`;
   const data = await hasura<{ insert_call_logs: { returning: NewCall[] } }>(
     env,
