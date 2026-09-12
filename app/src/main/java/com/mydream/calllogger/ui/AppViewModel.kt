@@ -14,8 +14,12 @@ import com.mydream.calllogger.BuildConfig
 import com.mydream.calllogger.net.AccountManager
 import com.mydream.calllogger.net.FlowApi
 import com.mydream.calllogger.net.IngestClient
+import com.mydream.calllogger.net.SendApi
+import com.mydream.calllogger.net.TemplateApi
 import com.mydream.calllogger.net.UpdateChecker
 import com.mydream.calllogger.net.WaStatus
+import com.mydream.calllogger.net.WaTemplate
+import org.json.JSONArray
 import com.mydream.calllogger.prefs.SettingsManager
 import com.mydream.calllogger.work.CallSync
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +33,10 @@ import kotlinx.coroutines.withContext
 
 data class ShareInfo(val uri: Uri, val fileName: String)
 
+/** Which native screen is showing. Flow *editing* still opens the web editor; everything
+ *  here (templates + test flow + day-send) is native. */
+enum class Route { HOME, TEMPLATES }
+
 data class UiState(
     val onboardingComplete: Boolean,
     val email: String,
@@ -41,7 +49,10 @@ data class UiState(
     val waStatus: WaStatus? = null,
     val partnerId: String? = null,
     val active: Boolean = true,
-    val update: UpdateChecker.Update? = null
+    val update: UpdateChecker.Update? = null,
+    val route: Route = Route.HOME,
+    val templates: List<WaTemplate> = emptyList(),
+    val templatesLoading: Boolean = false
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -174,6 +185,103 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 status.partnerId?.let { account.partnerId = it }
                 _state.update { it.copy(waStatus = status, partnerId = status.partnerId ?: it.partnerId) }
             }
+        }
+    }
+
+    // --- Native templates / test-flow / day-send ---------------------------------
+
+    fun openTemplates() {
+        _state.update { it.copy(route = Route.TEMPLATES) }
+        loadTemplates()
+    }
+
+    fun closeTemplates() = _state.update { it.copy(route = Route.HOME) }
+
+    /** Fetch the partner's WhatsApp templates for the picker / templates screen. */
+    fun loadTemplates() {
+        viewModelScope.launch {
+            _state.update { it.copy(templatesLoading = true) }
+            val list = withContext(Dispatchers.IO) {
+                val token = ensureToken() ?: return@withContext null
+                TemplateApi.list(token)
+            }
+            _state.update { it.copy(templates = list ?: emptyList(), templatesLoading = false) }
+        }
+    }
+
+    /** Submit a template for Meta approval. [onDone] runs on the main thread with the result. */
+    fun submitTemplate(
+        name: String,
+        language: String,
+        category: String,
+        components: JSONArray,
+        onDone: (ok: Boolean, message: String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                val token = ensureToken()
+                    ?: return@withContext TemplateApi.SubmitResult(false, null, "Not connected yet.")
+                TemplateApi.submit(token, name, language, category, components)
+            }
+            val msg = if (res.ok) "Submitted for approval — status ${res.status}." else (res.error ?: "Submit failed.")
+            _state.update { it.copy(message = msg) }
+            if (res.ok) loadTemplates()
+            onDone(res.ok, msg)
+        }
+    }
+
+    /** Run the saved flow on [number], simulating a [simType] ('missed'|'incoming') call. */
+    fun testFlow(number: String, simType: String, onDone: (ok: Boolean, message: String) -> Unit) {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                val token = ensureToken()
+                    ?: return@withContext FlowApi.RunFlowResult(false, null, "Not connected yet.")
+                FlowApi.runFlow(token, number, simType)
+            }
+            val msg = if (res.ok) "Test flow started for ${res.contact}." else (res.error ?: "Could not start the flow.")
+            _state.update { it.copy(message = msg) }
+            onDone(res.ok, msg)
+        }
+    }
+
+    /**
+     * Send [template] to the callers in the currently selected range whose call type is in
+     * [types] (e.g. incoming + missed). Recipients are de-duplicated by phone number.
+     */
+    fun sendToRange(
+        types: Set<Int>,
+        template: String,
+        language: String,
+        params: List<String>,
+        onDone: (ok: Boolean, message: String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val range = _state.value.selectedRange
+            val (start, end) = range.bounds()
+            val recipients = withContext(Dispatchers.IO) {
+                repo.getRange(start, end)
+                    .filter { it.type in types }
+                    .mapNotNull { c ->
+                        val num = c.e164?.takeIf { it.isNotBlank() }
+                            ?: c.number.takeIf { it.any(Char::isDigit) }
+                        num?.let { SendApi.Recipient(it, c.name) }
+                    }
+                    .distinctBy { it.number.filter(Char::isDigit) }
+            }
+            if (recipients.isEmpty()) {
+                val msg = "No matching callers to message for ${range.label}."
+                _state.update { it.copy(message = msg) }
+                onDone(false, msg)
+                return@launch
+            }
+            val res = withContext(Dispatchers.IO) {
+                val token = ensureToken() ?: return@withContext SendApi.Result(false, "Not connected yet.")
+                SendApi.sendNow(token, template, language, params, recipients)
+            }
+            val msg = if (res.ok) "Sending to ${recipients.size} ${range.label.lowercase()} caller(s)…"
+                      else (res.error ?: "Send failed.")
+            _state.update { it.copy(message = msg) }
+            onDone(res.ok, msg)
         }
     }
 

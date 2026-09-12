@@ -20,7 +20,13 @@ interface SchedMsg {
   template_name: string;
   language: string;
   params: unknown;
-  audience: { mode?: string; numbers?: string[]; since?: string; types?: number[] };
+  audience: {
+    mode?: string;
+    numbers?: string[];
+    contacts?: Array<{ number?: string; name?: string }>;
+    since?: string;
+    types?: number[];
+  };
   targets_built: boolean;
 }
 
@@ -177,7 +183,15 @@ async function sendToTarget(
 async function buildTargets(env: SchedulerEnv, m: SchedMsg): Promise<void> {
   let recipients: Array<{ to_e164: string; contact_name: string | null }> = [];
 
-  if (m.audience?.mode === 'selected' && Array.isArray(m.audience.numbers)) {
+  if (m.audience?.mode === 'selected' && Array.isArray(m.audience.contacts)) {
+    // Numbers WITH names (the app's day-send) so messages can greet each caller.
+    recipients = m.audience.contacts
+      .map((c) => ({
+        to_e164: normalize(String(c?.number ?? '')) ?? '',
+        contact_name: typeof c?.name === 'string' && c.name.trim() ? c.name.trim() : null,
+      }))
+      .filter((r) => !!r.to_e164);
+  } else if (m.audience?.mode === 'selected' && Array.isArray(m.audience.numbers)) {
     recipients = m.audience.numbers
       .map((n) => normalize(n))
       .filter((n): n is string => !!n)

@@ -19,7 +19,7 @@
 import { hasura } from './hasura';
 import { advanceDueRuns, runFlowManually, startFlowRunsForCalls, type NewCall } from './flow';
 import { dispatchDueScheduledMessages } from './scheduler';
-import { getWhatsAppCreds } from './whatsapp';
+import { getWhatsAppCreds, getTemplateWaba, submitTemplate } from './whatsapp';
 
 /** Cloudflare Rate Limiting binding (configured in wrangler.toml [[unsafe.bindings]]). */
 interface RateLimit {
@@ -167,6 +167,12 @@ function asString(v: unknown, max: number): string | null {
   const t = v.trim();
   if (!t) return null;
   return t.length > max ? t.slice(0, max) : t;
+}
+
+const SIM_CALL_TYPES = new Set(['missed', 'incoming', 'outgoing']);
+/** Validate a client-supplied simulated call type for a manual "test flow" run. */
+function parseSimType(v: unknown): string | null {
+  return typeof v === 'string' && SIM_CALL_TYPES.has(v) ? v : null;
 }
 
 /** Android CallLog.Calls.TYPE -> label. Kept in sync with the app's CallTypes.kt. */
@@ -768,7 +774,19 @@ async function handleAdminTemplates(request: Request, env: Env, url: URL): Promi
   if (!isAdmin(request, env)) return json({ error: 'unauthorized' }, 401);
   const partnerId = url.searchParams.get('partner');
   if (!partnerId) return json({ error: 'partner required' }, 400);
+  return templatesForPartner(env, partnerId);
+}
 
+/** GET /templates — a partner lists their OWN WhatsApp templates (device token). */
+async function handleTemplates(request: Request, env: Env): Promise<Response> {
+  const auth = await authDevice(request, env);
+  if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
+  return templatesForPartner(env, auth.partnerId);
+}
+
+/** Shared: a partner's templates, scoped to their primary WABA. Partner id is caller-supplied
+ *  by the admin route (from ?partner=) or token-derived by the device route — never trusted from a body. */
+async function templatesForPartner(env: Env, partnerId: string): Promise<Response> {
   try {
     const data = await hasura<{
       whatsapp_business_integrations: Array<{ waba_id: string | null }>;
@@ -808,8 +826,100 @@ async function handleAdminTemplates(request: Request, env: Env, url: URL): Promi
       }));
     return json({ items });
   } catch (e) {
-    console.log(`admin/templates failed: ${(e as Error).message}`);
+    console.log(`templates failed: ${(e as Error).message}`);
     return json({ error: 'templates_failed', detail: (e as Error).message }, 500);
+  }
+}
+
+/**
+ * POST /submit-template — a partner submits a WhatsApp template for Meta approval
+ * (device token). Uses the partner's OWN WABA only (getTemplateWaba, no shared
+ * fallback), validates input, throttles per-partner/day, submits to Meta, then mirrors
+ * the row into the shared table so it shows in-app AND in the cravings admin screen.
+ */
+async function handleSubmitTemplate(request: Request, env: Env): Promise<Response> {
+  const auth = await authDevice(request, env);
+  if (!auth?.partnerId) return json({ error: 'unauthorized' }, 401);
+  const parsed = await parseJson(request);
+  if (!parsed.ok) return parsed.res;
+
+  const name = asString(parsed.body.name, 512);
+  if (!name || !/^[a-z0-9_]{1,512}$/.test(name)) {
+    return json({ error: 'invalid_name', detail: 'Use lowercase letters, numbers and underscores only.' }, 400);
+  }
+  const language = asString(parsed.body.language, 16) || 'en';
+  const category = (asString(parsed.body.category, 32) || 'UTILITY').toUpperCase();
+  if (!['UTILITY', 'MARKETING', 'AUTHENTICATION'].includes(category)) {
+    return json({ error: 'invalid_category' }, 400);
+  }
+  const components = parsed.body.components;
+  const bodyText = Array.isArray(components)
+    ? (components.find((c) => (c as { type?: string })?.type === 'BODY') as { text?: string } | undefined)?.text
+    : undefined;
+  if (!Array.isArray(components) || !bodyText || typeof bodyText !== 'string' || bodyText.length > 1024) {
+    return json({ error: 'invalid_components', detail: 'A BODY with text (≤1024 chars) is required.' }, 400);
+  }
+
+  // Abuse throttle: cap submissions per partner per day (protects the WABA's Meta
+  // quality rating from creation-rate flags). Best-effort KV counter.
+  const day = new Date().toISOString().slice(0, 10);
+  const rlKey = `submitcount:${auth.partnerId}:${day}`;
+  const count = parseInt((await env.TOKENS.get(rlKey)) || '0', 10) || 0;
+  if (count >= 20) return json({ error: 'rate_limited', detail: 'Daily template submission limit reached.' }, 429);
+
+  // Partner's OWN WABA only — never the shared Menuthere account.
+  const waba = await getTemplateWaba(env, auth.partnerId);
+  if (!waba) {
+    return json(
+      { error: 'connect_whatsapp_first', detail: 'Connect your WhatsApp number before submitting a template.' },
+      409
+    );
+  }
+
+  // Block a resubmit while an identical name+language is already pending/approved.
+  const existing = await hasura<{ whatsapp_message_templates: Array<{ status: string | null }> }>(
+    env,
+    `query D($p: uuid!, $n: String!, $l: String!) {
+      whatsapp_message_templates(where: { partner_id: { _eq: $p }, name: { _eq: $n }, language: { _eq: $l } }, limit: 1) { status }
+    }`,
+    { p: auth.partnerId, n: name, l: language }
+  );
+  const st = existing.whatsapp_message_templates[0]?.status?.toUpperCase();
+  if (st === 'PENDING' || st === 'APPROVED') {
+    return json({ error: 'duplicate', detail: `A ${st} template named "${name}" already exists.` }, 409);
+  }
+
+  try {
+    const res = await submitTemplate(env, waba, { name, language, category, components });
+    // Mirror into the shared table (Meta-first) so it appears in-app and in the cravings
+    // admin screen immediately; on_conflict makes a resubmit-after-rejection idempotent.
+    await hasura(
+      env,
+      `mutation Ins($o: whatsapp_message_templates_insert_input!) {
+        insert_whatsapp_message_templates_one(object: $o, on_conflict: {
+          constraint: whatsapp_message_templates_partner_name_lang_unique,
+          update_columns: [category, components, status, meta_template_id, waba_id, rejection_reason, updated_at]
+        }) { id }
+      }`,
+      {
+        o: {
+          partner_id: auth.partnerId,
+          name,
+          language,
+          category,
+          components,
+          status: res.status,
+          meta_template_id: res.metaId || null,
+          waba_id: waba.wabaId,
+          rejection_reason: null,
+          updated_at: new Date().toISOString(),
+        },
+      }
+    ).catch((e) => console.log(`submit-template mirror failed: ${(e as Error).message}`));
+    await env.TOKENS.put(rlKey, String(count + 1), { expirationTtl: 60 * 60 * 25 }).catch(() => {});
+    return json({ ok: true, status: res.status, name, language });
+  } catch (e) {
+    return json({ ok: false, error: 'submit_failed', detail: (e as Error).message }, 400);
   }
 }
 
@@ -826,7 +936,8 @@ async function handleRunFlow(request: Request, env: Env): Promise<Response> {
   const number = asString(parsed.body.number, 32);
   if (!number) return json({ error: 'number required' }, 400);
   const name = asString(parsed.body.name, 120);
-  const result = await runFlowManually(env, auth.partnerId, auth.email, number, name);
+  const simType = parseSimType(parsed.body.simType);
+  const result = await runFlowManually(env, auth.partnerId, auth.email, number, name, simType);
   return json(result, result.ok ? 200 : 400);
 }
 
@@ -845,7 +956,8 @@ async function handleAdminRunFlow(request: Request, env: Env, url: URL): Promise
     partnerId,
     asString(parsed.body.accountEmail, 254),
     number,
-    name
+    name,
+    parseSimType(parsed.body.simType)
   );
   return json(result, result.ok ? 200 : 400);
 }
@@ -1077,6 +1189,8 @@ export default {
     if (p === '/run-flow' && method === 'POST') return handleRunFlow(request, env);
     if (p === '/wa-status' && method === 'GET') return handleWaStatus(request, env);
     if (p === '/flow-enabled' && method === 'POST') return handleFlowEnabled(request, env);
+    if (p === '/templates' && method === 'GET') return handleTemplates(request, env);
+    if (p === '/submit-template' && method === 'POST') return handleSubmitTemplate(request, env);
 
     // Superadmin (ADMIN_API_KEY)
     if (p === '/admin/partners' && method === 'GET') return handleAdminPartners(request, env);

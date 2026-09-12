@@ -11,7 +11,7 @@
 import { hasura } from './hasura';
 import { getWhatsAppCreds, isOptedOut, sendTemplate, WhatsAppEnv } from './whatsapp';
 
-export type FlowEnv = WhatsAppEnv;
+export type FlowEnv = WhatsAppEnv & { TOKENS?: KVNamespace };
 
 interface FlowNode {
   id: string;
@@ -38,6 +38,8 @@ interface RunRow {
   cursor_node_id: string;
   created_at: string;
   call_log_id: string | null;
+  /** Transient (NOT a DB column): simulated call type for a manual "test flow" run. */
+  __simType?: string | null;
 }
 
 /** A call row that just landed (from the queue consumer). */
@@ -127,7 +129,8 @@ export async function runFlowManually(
   partnerId: string,
   accountEmail: string | null,
   numberRaw: string,
-  name: string | null
+  name: string | null,
+  simType: string | null = null
 ): Promise<{ ok: true; runId: string; contact: string } | { ok: false; error: string }> {
   const contact = normalizeE164(numberRaw);
   if (!contact) return { ok: false, error: 'Enter a valid phone number with country code (e.g. +9198…).' };
@@ -156,8 +159,31 @@ export async function runFlowManually(
   const runId = res.insert_flow_runs_one?.id;
   if (!runId) return { ok: false, error: 'Could not start the flow run.' };
 
-  // Fire the first step now; the cron remains the backstop for waits/retries.
-  await advanceDueRuns(env, new Date()).catch(() => {});
+  // Persist the simulated call type for this manual run so call-type conditions
+  // (missed/incoming/outgoing) resolve correctly even though there's no real call.
+  // Stored in the Worker's OWN KV (no shared-Hasura change). The in-memory copy on the
+  // run drives the immediate inline execution below (no KV read-after-write race); the
+  // KV copy covers the cron backstop after any wait step (TTL covers long waits).
+  if (simType && env.TOKENS) {
+    await env.TOKENS.put(`simrun:${runId}`, simType, { expirationTtl: 60 * 60 * 24 * 90 }).catch(() => {});
+  }
+
+  // Fire the first step(s) now, inline, with the simulated type attached in-memory.
+  // The cron remains the backstop for waits/retries.
+  const now = new Date();
+  const claimed = await claimRun(
+    env,
+    runId,
+    now.toISOString(),
+    new Date(now.getTime() + LEASE_MS).toISOString()
+  );
+  if (claimed) {
+    try {
+      await runOne(env, { ...claimed, __simType: simType });
+    } catch (e) {
+      await failRun(env, runId, (e as Error).message);
+    }
+  }
   return { ok: true, runId, contact };
 }
 
@@ -259,9 +285,9 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
       const check = String(node.data?.check ?? 'not_replied');
       let satisfied: boolean;
       if (check === 'missed' || check === 'incoming' || check === 'outgoing') {
-        // Branch on the TYPE of the call that triggered this run. Manual runs have
-        // no call (call_log_id null) → these take the "false" (else) leg.
-        satisfied = (await getCallType(env, run.call_log_id)) === check;
+        // Branch on the TYPE of the call that triggered this run. Manual "test flow"
+        // runs have no real call — they carry a simulated type instead (see getCallType).
+        satisfied = (await getCallType(env, run)) === check;
       } else {
         // replied / not_replied: did the contact reply on WhatsApp since the run started?
         const replied = await hasReplied(env, run.contact_e164, run.created_at);
@@ -278,15 +304,27 @@ async function runOne(env: FlowEnv, run: RunRow): Promise<void> {
   return finishRun(env, run.id, 'done');
 }
 
-/** The call_type of the call that started a run ('incoming'|'outgoing'|'missed'|…), or null. */
-async function getCallType(env: FlowEnv, callLogId: string | null): Promise<string | null> {
-  if (!callLogId) return null;
-  const d = await hasura<{ call_logs_by_pk: { call_type: string | null } | null }>(
-    env,
-    `query CallType($id: uuid!) { call_logs_by_pk(id: $id) { call_type } }`,
-    { id: callLogId }
-  );
-  return d.call_logs_by_pk?.call_type ?? null;
+/**
+ * The call_type that started a run ('incoming'|'outgoing'|'missed'|…), or null.
+ * Real runs read the linked call_log. Manual "test flow" runs have no call, so they
+ * resolve a SIMULATED type — from the in-memory value on the immediate inline run, else
+ * from the Worker's KV (cron backstop after a wait). Never touches shared Hasura schema.
+ */
+async function getCallType(env: FlowEnv, run: RunRow): Promise<string | null> {
+  if (run.call_log_id) {
+    const d = await hasura<{ call_logs_by_pk: { call_type: string | null } | null }>(
+      env,
+      `query CallType($id: uuid!) { call_logs_by_pk(id: $id) { call_type } }`,
+      { id: run.call_log_id }
+    );
+    return d.call_logs_by_pk?.call_type ?? null;
+  }
+  if (run.__simType) return run.__simType;
+  if (env.TOKENS) {
+    const t = await env.TOKENS.get(`simrun:${run.id}`);
+    if (t) return t;
+  }
+  return null;
 }
 
 /** Whether the contact has replied on WhatsApp since the run started (inbound webhook). */

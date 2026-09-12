@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -52,7 +53,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +80,7 @@ fun HomeScreen(vm: AppViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    var showSend by remember { mutableStateOf(false) }
 
     val permissions = remember {
         buildList {
@@ -214,7 +218,7 @@ fun HomeScreen(vm: AppViewModel) {
             )
 
             if (state.hasPermissions) {
-                WhatsAppCard(status = state.waStatus)
+                WhatsAppCard(status = state.waStatus, onManageTemplates = { vm.openTemplates() })
             }
 
             Row(
@@ -228,6 +232,15 @@ fun HomeScreen(vm: AppViewModel) {
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f)
                 )
+                OutlinedButton(
+                    onClick = { vm.loadTemplates(); showSend = true },
+                    enabled = state.calls.isNotEmpty()
+                ) {
+                    Icon(Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Send")
+                }
+                Spacer(Modifier.width(8.dp))
                 Button(
                     onClick = { vm.export() },
                     enabled = state.calls.isNotEmpty()
@@ -274,11 +287,15 @@ fun HomeScreen(vm: AppViewModel) {
             }
         }
     }
+
+    if (showSend) {
+        SendTemplateDialog(vm = vm, onDismiss = { showSend = false })
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WhatsAppCard(status: WaStatus?) {
+private fun WhatsAppCard(status: WaStatus?, onManageTemplates: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -323,6 +340,14 @@ private fun WhatsAppCard(status: WaStatus?) {
                         }
                     )
                 }
+            }
+
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            TextButton(
+                onClick = onManageTemplates,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Message templates")
             }
         }
     }

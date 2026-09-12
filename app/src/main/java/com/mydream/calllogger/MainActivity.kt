@@ -7,9 +7,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.BackHandler
 import com.mydream.calllogger.ui.AppViewModel
 import com.mydream.calllogger.ui.HomeScreen
 import com.mydream.calllogger.ui.OnboardingScreen
+import com.mydream.calllogger.ui.Route
+import com.mydream.calllogger.ui.TemplatesScreen
 import com.mydream.calllogger.ui.theme.CallLoggerTheme
 
 class MainActivity : ComponentActivity() {
@@ -23,8 +26,12 @@ class MainActivity : ComponentActivity() {
 
                 if (!state.onboardingComplete) {
                     OnboardingScreen(onSubmit = { vm.saveEmail(it) })
-                } else {
-                    HomeScreen(vm)
+                } else when (state.route) {
+                    Route.TEMPLATES -> {
+                        BackHandler { vm.closeTemplates() }
+                        TemplatesScreen(vm)
+                    }
+                    Route.HOME -> HomeScreen(vm)
                 }
             }
         }

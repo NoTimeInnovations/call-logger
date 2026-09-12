@@ -188,3 +188,99 @@ export async function isOptedOut(env: WhatsAppEnv, e164: string): Promise<boolea
   );
   return !!d.cl_optout_by_pk;
 }
+
+// ---------------------------------------------------------------------------
+// Template MANAGEMENT (create + submit for Meta approval).
+//
+// Unlike sending (getWhatsAppCreds, which falls back to the shared Menuthere
+// number), template submission must act on the PARTNER'S OWN WABA only — creating
+// a partner's template on the shared account would pollute it and risk its quality
+// rating. getTemplateWaba therefore requires the partner's own waba_id and never
+// falls back to a shared WABA; only the ACCESS TOKEN may fall back to the system
+// token (exactly as cravings-v2's own createMetaTemplate does), which still acts on
+// the partner's WABA.
+// ---------------------------------------------------------------------------
+
+export interface TemplateWaba {
+  wabaId: string;
+  accessToken: string;
+}
+
+/** The partner's own WABA id + a usable management token, or null if none connected. */
+export async function getTemplateWaba(
+  env: WhatsAppEnv,
+  partnerId: string
+): Promise<TemplateWaba | null> {
+  const data = await hasura<{
+    whatsapp_business_integrations: Array<{ waba_id: string | null; access_token: string | null }>;
+  }>(
+    env,
+    `query W($id: uuid!) {
+      whatsapp_business_integrations(
+        where: { partner_id: { _eq: $id } }, order_by: { is_primary: desc }, limit: 1
+      ) { waba_id access_token }
+    }`,
+    { id: partnerId }
+  );
+  const integ = data.whatsapp_business_integrations[0];
+  const wabaId = integ?.waba_id?.trim();
+  const accessToken = (integ?.access_token || env.WHATSAPP_ACCESS_TOKEN || '').trim();
+  if (!wabaId || !accessToken) return null; // no partner-owned WABA → refuse (never shared WABA)
+  return { wabaId, accessToken };
+}
+
+export interface SubmitTemplateInput {
+  name: string;
+  language: string;
+  category: string;
+  components: unknown[];
+}
+
+/**
+ * Create a WhatsApp message template on the partner's WABA and submit it for Meta
+ * review. Returns Meta's template id + status ('PENDING' until reviewed). Throws with
+ * a user-facing message on failure (mirrors cravings-v2's error mapping).
+ */
+export async function submitTemplate(
+  env: WhatsAppEnv,
+  waba: TemplateWaba,
+  tpl: SubmitTemplateInput
+): Promise<{ metaId: string; status: string; category: string }> {
+  const version = env.GRAPH_API_VERSION || 'v20.0';
+  const url = `https://graph.facebook.com/${version}/${waba.wabaId}/message_templates`;
+  const payload = {
+    name: tpl.name,
+    language: tpl.language,
+    category: tpl.category,
+    components: tpl.components,
+  };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${waba.accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    id?: string;
+    status?: string;
+    category?: string;
+    error?: { message?: string; code?: number; error_subcode?: number; error_user_msg?: string };
+  };
+  if (!resp.ok || data.error) {
+    const err = data.error;
+    if (err?.error_subcode === 2388185) {
+      throw new Error('Your WhatsApp Business must be verified before you can submit templates.');
+    }
+    if (resp.status === 429 || err?.code === 4 || err?.code === 80007) {
+      throw new Error('Too many template requests — please try again later.');
+    }
+    if (resp.status >= 500) {
+      throw new Error('Template service temporarily unavailable — please try again.');
+    }
+    throw new Error(err?.error_user_msg || err?.message || `Meta ${resp.status}: template submit failed`);
+  }
+  return {
+    metaId: data.id ?? '',
+    status: (data.status || 'PENDING').toUpperCase(),
+    category: (data.category || tpl.category).toUpperCase(),
+  };
+}
